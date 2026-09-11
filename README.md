@@ -16,6 +16,14 @@ $PIO device monitor --environment display_4_3_capacitive --port /dev/ttyACM1
 
 The USB device can re-enumerate as a different `/dev/ttyACM*` path. Use `$PIO device list` before upload or monitoring.
 
+## Secrets
+
+Copy `secrets/secrets.example.h` to `secrets/secrets.h` and fill in your WiFi SSID/password and Apex username/password. `secrets/secrets.h` is gitignored and never committed.
+
+## Apex Integration
+
+The dashboard connects to a Neptune Apex controller at `http://apex.local` over the local network (no cloud) and polls `/cgi-bin/status.json` every 10 seconds via HTTP Basic auth to display the current water temperature (the `Tmp` probe).
+
 ## Hardware Notes
 
 - Board: Guition JC4827W543C, ESP32-S3, 4 MB QIO flash, 8 MB OPI PSRAM.
