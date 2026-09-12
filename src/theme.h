@@ -26,6 +26,10 @@ constexpr uint32_t col_feed_idle_bg = 0x141A20;
 constexpr uint32_t col_feed_idle_border = 0x28303A;
 constexpr uint32_t col_tab_active_bg = 0x151A21;
 constexpr uint32_t col_outline_ink = 0x8D979F;
+constexpr uint32_t col_key_bg = 0x1B212A;
+constexpr uint32_t col_key_alt = 0x141A21;
+constexpr uint32_t col_key_ink_dim = 0xAAB4BD;
+constexpr uint32_t col_disabled_ink = 0x4D565F;
 
 // The design asks for Archivo 9/10/11/12/15 px and IBM Plex Mono 10/14/18/27 px.
 // LVGL only ships Montserrat in even sizes, so these are the nearest matches

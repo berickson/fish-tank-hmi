@@ -20,6 +20,19 @@ The USB device can re-enumerate as a different `/dev/ttyACM*` path. Use `$PIO de
 
 Copy `secrets/secrets.example.h` to `secrets/secrets.h` and fill in your WiFi SSID/password and Apex username/password. `secrets/secrets.h` is gitignored and never committed.
 
+## Wi-Fi Credentials
+
+The compiled-in network from `secrets.h` is the fallback, so a freshly flashed board comes
+up without any setup. Joining a network from the Setup tab saves it to NVS (namespace
+`reefwifi`), and that saved network is used from then on. If it will not come up, the panel
+falls back to the compiled-in one rather than stranding itself.
+
+Joining blocks the radio for several seconds, so it runs as a small state machine that
+lets the panel paint "Joining..." before everything stalls. Scanning is asynchronous and
+does not block at all. A typed passphrase is wiped from RAM as soon as the attempt ends.
+
+The Apex credentials stay in `secrets.h` — only Wi-Fi is configurable from the panel.
+
 ## Screens
 
 The UI follows `design/V1/` (open `design/V1/Reef Controller.dc.html` in a browser for the
@@ -32,8 +45,8 @@ bar frame four pages:
   RETURN ALL TO AUTO.
 - **Alerts** — live problems (outlets out of auto, a dead Apex link) above an
   acknowledgeable history.
-- **Setup** — Wi-Fi and Apex link status with a RETRY button. Network selection and the
-  on-screen keyboard are not built yet.
+- **Setup** — Wi-Fi and Apex link status, a scanned list of nearby networks, and RETRY /
+  RESCAN. Tapping a network opens the on-screen keyboard to join it.
 
 The power button in the status bar dims the panel to an idle screen; any touch wakes it.
 There is no auto-sleep.
@@ -102,6 +115,7 @@ and worth understanding before you flash it:
 | `src/main.cpp` | board bring-up, LVGL init, poll scheduling |
 | `src/model.h` / `.cpp` | `ReefState` — everything the UI draws |
 | `src/apex.h` / `.cpp` | Apex HTTP client: poll, outlet writes, feed cycles |
+| `src/wifi_manager.h` / `.cpp` | credentials (NVS + secrets fallback), connect, scan, join |
 | `src/theme.h` / `.cpp` | palette and shared LVGL styles |
 | `src/ui.h` / `.cpp` | all screens; `ui_create()` builds, `ui_update()` repaints |
 | `src/logo_mark.c` | generated from `design/V1/robonerd-mark.svg` |

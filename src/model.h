@@ -8,6 +8,9 @@
 constexpr uint8_t max_outlets = 12;
 constexpr uint8_t spark_points = 16;
 constexpr uint8_t max_events = 8;
+constexpr uint8_t max_networks = 8;
+// WPA2 allows 63; the field and the keyboard both stop there.
+constexpr uint8_t max_password_len = 63;
 
 // Apex output status[0] codes: "AON"/"AOF" are the program driving the outlet on
 // or off, bare "ON"/"OFF" are a manual override that the Apex holds until cleared.
@@ -61,6 +64,19 @@ struct Event {
   EventKind kind;
 };
 
+struct Network {
+  char ssid[33];
+  int8_t rssi;
+  bool open;   // no passphrase needed
+  bool saved;  // this is the network we are on or have credentials for
+};
+
+enum class ScanState : uint8_t { idle, running, done, failed };
+
+// Joining blocks for several seconds, so it runs as a small state machine that
+// lets the panel paint "Joining..." before the radio stalls everything.
+enum class JoinState : uint8_t { none, requested, running, succeeded, failed };
+
 struct ReefState {
   Reading temperature;
   Reading ph;
@@ -75,6 +91,14 @@ struct ReefState {
 
   bool wifi_up = false;
   bool apex_up = false;
+
+  Network networks[max_networks];
+  uint8_t network_count = 0;
+  ScanState scan_state = ScanState::idle;
+
+  JoinState join_state = JoinState::none;
+  char join_ssid[33] = {};
+  char join_password[max_password_len + 1] = {};
   uint32_t last_reply_ms = 0;   // millis() of the last successful poll
   bool ever_connected = false;  // true once we have seen one good poll
 

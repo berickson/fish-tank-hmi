@@ -10,7 +10,6 @@
 namespace {
 
 constexpr char apex_mdns_name[] = "apex";
-constexpr uint32_t wifi_connect_timeout_ms = 15000;
 // HTTP runs on the UI thread, so a dead Apex must fail fast or the panel freezes.
 constexpr uint16_t http_timeout_ms = 2000;
 
@@ -88,27 +87,6 @@ void store_reading(Reading &reading, float value) {
 }  // namespace
 
 void apex_forget_address() { apex_ip = INADDR_NONE; }
-
-void apex_connect_wifi(ReefState &state) {
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true);
-  delay(100);
-  WiFi.begin(wifi_ssid, wifi_password);
-
-  const uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < wifi_connect_timeout_ms) {
-    delay(500);
-    Serial.printf("WiFi status: %d\n", WiFi.status());
-  }
-
-  state.wifi_up = WiFi.status() == WL_CONNECTED;
-  if (state.wifi_up) {
-    Serial.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
-    MDNS.begin("fish-tank-hmi");
-  } else {
-    Serial.printf("WiFi connection failed, status: %d\n", WiFi.status());
-  }
-}
 
 bool apex_poll(ReefState &state) {
   state.wifi_up = WiFi.status() == WL_CONNECTED;

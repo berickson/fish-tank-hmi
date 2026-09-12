@@ -7,6 +7,7 @@
 #include "apex.h"
 #include "model.h"
 #include "ui.h"
+#include "wifi_manager.h"
 
 namespace {
 constexpr uint32_t apex_poll_interval_ms = 10000;
@@ -149,7 +150,7 @@ void setup() {
   lv_timer_handler();
 
   Serial.println("Reef controller starting");
-  apex_connect_wifi(reef);
+  wifi_begin(reef);
 }
 
 void loop() {
@@ -163,6 +164,7 @@ void loop() {
   last_tick = now;
   lv_timer_handler();
 
+  wifi_poll_scan(reef);
   ui_service_actions();
 
   const uint32_t interval = ui_is_asleep() ? apex_sleep_poll_interval_ms : apex_poll_interval_ms;

@@ -4,8 +4,6 @@
 
 // Talks to the Neptune Apex on the local network. No cloud, no Fusion account.
 
-void apex_connect_wifi(ReefState &state);
-
 // One poll of /cgi-bin/status.json into `state`. Returns false on any failure,
 // in which case the previous readings are left untouched so the UI can keep
 // showing the last known values instead of blanking.

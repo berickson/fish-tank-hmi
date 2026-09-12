@@ -4,6 +4,7 @@
 
 #include "apex.h"
 #include "theme.h"
+#include "wifi_manager.h"
 
 // The built-in Montserrat fonts cover ASCII plus the degree sign and the bullet
 // (and nothing else), so those two are the only non-ASCII glyphs used here --
@@ -27,6 +28,7 @@ constexpr uint8_t backlight_awake_percent = 100;
 // broken rather than asleep.
 constexpr uint8_t backlight_asleep_percent = 3;
 constexpr uint32_t idle_refresh_period_ms = 100;
+constexpr uint32_t join_result_linger_ms = 5000;
 
 enum Tab : uint8_t { tab_home, tab_control, tab_alerts, tab_setup };
 
@@ -97,8 +99,64 @@ lv_obj_t *setup_wifi_ssid;
 lv_obj_t *setup_wifi_meta;
 lv_obj_t *setup_apex_state;
 lv_obj_t *setup_apex_meta;
+lv_obj_t *setup_scan_note;
+
+struct NetworkUi {
+  lv_obj_t *row;
+  lv_obj_t *ssid;
+  lv_obj_t *rssi;
+  lv_obj_t *tag;
+};
+NetworkUi network_rows[max_networks];
 
 lv_obj_t *sleep_overlay;
+
+// ------------------------------------------------------- keyboard overlay
+
+lv_obj_t *kb_overlay;
+lv_obj_t *kb_title;
+lv_obj_t *kb_join_btn;
+lv_obj_t *kb_join_label;
+lv_obj_t *kb_field;
+lv_obj_t *kb_reveal_label;
+lv_obj_t *kb_matrix;
+
+enum class KbLayer : uint8_t { lower, upper, symbols };
+KbLayer kb_layer = KbLayer::lower;
+// Swapping layers re-maps the matrix, which is unsafe to do from inside an event
+// callback, so the key handler only asks for it and update_keyboard() does it.
+bool kb_layout_dirty = false;
+bool kb_pressing = false;
+bool kb_reveal = false;
+char kb_ssid[33] = {};
+char kb_password[max_password_len + 1] = {};
+uint8_t kb_length = 0;
+// Masked display: one bullet per character, so it needs three bytes each.
+char kb_display[max_password_len * 3 + 1];
+
+// WPA2 personal will not accept anything shorter, so JOIN stays inert until
+// there are at least this many characters.
+constexpr uint8_t kb_min_password = 8;
+
+// The maps are handed to LVGL by pointer and never copied, so they must outlive
+// every call -- hence file scope rather than locals.
+const char *kb_map_lower[] = {"q",           "w", "e", "r", "t", "y", "u", "i", "o",
+                              "p",           "\n", " ", "a", "s", "d", "f", "g", "h",
+                              "j",           "k", "l", " ", "\n", LV_SYMBOL_UP, "z", "x", "c",
+                              "v",           "b", "n", "m", LV_SYMBOL_BACKSPACE, "\n",
+                              "123",         "space", "_", "clear", ""};
+
+const char *kb_map_upper[] = {"Q",           "W", "E", "R", "T", "Y", "U", "I", "O",
+                              "P",           "\n", " ", "A", "S", "D", "F", "G", "H",
+                              "J",           "K", "L", " ", "\n", LV_SYMBOL_UP, "Z", "X", "C",
+                              "V",           "B", "N", "M", LV_SYMBOL_BACKSPACE, "\n",
+                              "123",         "space", "_", "clear", ""};
+
+const char *kb_map_symbols[] = {"1",   "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
+                                "-",   "/", ":", ";", "(", ")", "$", "&", "@", "\"", "\n",
+                                LV_SYMBOL_UP, ".", ",", "?", "!", "'", "*", "#", "%", "+", "=",
+                                LV_SYMBOL_BACKSPACE, "\n",
+                                "abc", "space", "_", "clear", ""};
 
 const char *mode_matrix_map[] = {"OFF", "AUTO", "ON", ""};
 
@@ -114,7 +172,10 @@ lv_obj_t *make_box(lv_obj_t *parent, lv_style_t *style) {
 
 void set_flex(lv_obj_t *obj, lv_flex_flow_t flow, lv_coord_t gap, lv_flex_align_t cross) {
   lv_obj_set_flex_flow(obj, flow);
-  lv_obj_set_flex_align(obj, LV_FLEX_ALIGN_START, cross, LV_FLEX_ALIGN_START);
+  // The third argument places the track itself on the cross axis. Leaving it at
+  // START pinned single-track rows to the top of their container even when the
+  // items inside the track were centred, so it follows `cross` too.
+  lv_obj_set_flex_align(obj, LV_FLEX_ALIGN_START, cross, cross);
   lv_obj_set_style_pad_row(obj, gap, 0);
   lv_obj_set_style_pad_column(obj, gap, 0);
 }
@@ -163,7 +224,13 @@ void pulse_opacity(lv_obj_t *obj, uint32_t period_ms, lv_opa_t low, lv_opa_t hig
   lv_anim_start(&anim);
 }
 
+void kb_close();
+
 void go_to_tab(uint8_t tab) {
+  // The status bar stays live above the keyboard, so its shortcuts -- and the
+  // power button, via wake() -- can land here with the overlay still up.
+  // Leaving it would strand it over whichever page we switch to.
+  kb_close();
   active_tab = tab;
   for (uint8_t i = 0; i < tab_count; ++i) {
     show(pages[i], i == tab);
@@ -359,6 +426,256 @@ void mode_matrix_draw(lv_event_t *event) {
   dsc->rect_dsc->border_width = 0;
   if (dsc->label_dsc != nullptr) {
     dsc->label_dsc->color = lv_color_hex(ink);
+  }
+}
+
+// ------------------------------------------------------- keyboard events
+
+void kb_render_display() {
+  if (kb_length == 0) {
+    snprintf(kb_display, sizeof(kb_display), "Password");
+    return;
+  }
+  if (kb_reveal) {
+    snprintf(kb_display, sizeof(kb_display), "%s", kb_password);
+    return;
+  }
+  char *out = kb_display;
+  for (uint8_t i = 0; i < kb_length; ++i) {
+    memcpy(out, GLYPH_BULLET, 3);
+    out += 3;
+  }
+  *out = '\0';
+}
+
+// set_map only clears the control bits when the button count changes (so
+// lower <-> upper keeps the old ones), which is why widths and flags are
+// re-applied unconditionally here.
+void apply_kb_layout() {
+  const bool symbols = kb_layer == KbLayer::symbols;
+  const char **map = symbols                    ? kb_map_symbols
+                     : kb_layer == KbLayer::upper ? kb_map_upper
+                                                  : kb_map_lower;
+  lv_btnmatrix_set_map(kb_matrix, map);
+
+  auto width = [&](uint16_t from, uint16_t to, uint8_t units) {
+    for (uint16_t i = from; i <= to; ++i) {
+      lv_btnmatrix_set_btn_width(kb_matrix, i, units);
+    }
+  };
+
+  // A button matrix re-fires VALUE_CHANGED every 100 ms once a press passes the
+  // long-press threshold. On a keyboard that turns a slightly long tap into a
+  // burst of repeats, so it is off everywhere except backspace, where holding to
+  // delete is the one place it helps.
+  auto set_repeat_policy = [&](uint16_t backspace_id) {
+    lv_btnmatrix_set_btn_ctrl_all(kb_matrix, LV_BTNMATRIX_CTRL_NO_REPEAT);
+    lv_btnmatrix_clear_btn_ctrl(kb_matrix, backspace_id, LV_BTNMATRIX_CTRL_NO_REPEAT);
+  };
+
+  if (symbols) {
+    width(0, 19, 5);
+    lv_btnmatrix_set_btn_width(kb_matrix, 20, 8);  // shift, returns to caps
+    width(21, 30, 5);
+    lv_btnmatrix_set_btn_width(kb_matrix, 31, 8);  // backspace
+    lv_btnmatrix_set_btn_width(kb_matrix, 32, 4);  // abc
+    lv_btnmatrix_set_btn_width(kb_matrix, 33, 12);
+    lv_btnmatrix_set_btn_width(kb_matrix, 34, 2);  // _
+    lv_btnmatrix_set_btn_width(kb_matrix, 35, 4);  // clear
+    set_repeat_policy(31);
+    return;
+  }
+
+  width(0, 9, 5);
+  // Half-key inset either side of the home row, as in the design. The spacers
+  // are real buttons that are simply never drawn or pressed.
+  for (const uint16_t spacer : {10, 20}) {
+    lv_btnmatrix_set_btn_width(kb_matrix, spacer, 3);
+    lv_btnmatrix_set_btn_ctrl(kb_matrix, spacer,
+                              LV_BTNMATRIX_CTRL_HIDDEN | LV_BTNMATRIX_CTRL_DISABLED);
+  }
+  width(11, 19, 5);
+  lv_btnmatrix_set_btn_width(kb_matrix, 21, 8);  // shift
+  width(22, 28, 5);
+  lv_btnmatrix_set_btn_width(kb_matrix, 29, 8);  // backspace
+  lv_btnmatrix_set_btn_width(kb_matrix, 30, 4);  // 123
+  lv_btnmatrix_set_btn_width(kb_matrix, 31, 12);
+  lv_btnmatrix_set_btn_width(kb_matrix, 32, 2);  // _
+  lv_btnmatrix_set_btn_width(kb_matrix, 33, 4);  // clear
+  set_repeat_policy(29);
+}
+
+void kb_close() {
+  show(kb_overlay, false);
+  // The passphrase should not outlive the dialog that collected it.
+  memset(kb_password, 0, sizeof(kb_password));
+  memset(kb_display, 0, sizeof(kb_display));
+  kb_length = 0;
+  kb_reveal = false;
+  kb_layer = KbLayer::lower;
+  kb_layout_dirty = false;
+  kb_pressing = false;
+}
+
+void kb_open(const char *ssid) {
+  snprintf(kb_ssid, sizeof(kb_ssid), "%s", ssid);
+  memset(kb_password, 0, sizeof(kb_password));
+  kb_length = 0;
+  kb_reveal = false;
+  kb_layer = KbLayer::lower;
+  kb_layout_dirty = false;
+  kb_pressing = false;
+  apply_kb_layout();
+  kb_render_display();
+
+  char title[48];
+  snprintf(title, sizeof(title), "Join %s", kb_ssid);
+  set_label(kb_title, title);
+  show(kb_overlay, true);
+}
+
+void kb_append(const char *text) {
+  const size_t len = strlen(text);
+  if (kb_length + len > max_password_len) {
+    return;
+  }
+  memcpy(kb_password + kb_length, text, len);
+  kb_length += len;
+  kb_password[kb_length] = '\0';
+
+  // Shift is one-shot: it applies to a single character and then releases.
+  if (kb_layer == KbLayer::upper) {
+    kb_layer = KbLayer::lower;
+    kb_layout_dirty = true;
+  }
+}
+
+void kb_key_event(lv_event_t *event) {
+  lv_obj_t *matrix = lv_event_get_target(event);
+  const uint16_t id = lv_btnmatrix_get_selected_btn(matrix);
+  if (id == LV_BTNMATRIX_BTN_NONE) {
+    return;
+  }
+  const char *text = lv_btnmatrix_get_btn_text(matrix, id);
+  if (text == nullptr) {
+    return;
+  }
+
+  if (strcmp(text, LV_SYMBOL_UP) == 0) {
+    // From the symbol layer this comes back to the letters with caps latched,
+    // which is the only useful thing shift can mean there.
+    kb_layer = kb_layer == KbLayer::upper ? KbLayer::lower : KbLayer::upper;
+    kb_layout_dirty = true;
+  } else if (strcmp(text, LV_SYMBOL_BACKSPACE) == 0) {
+    if (kb_length > 0) {
+      kb_password[--kb_length] = '\0';
+    }
+  } else if (strcmp(text, "123") == 0 || strcmp(text, "abc") == 0) {
+    kb_layer = kb_layer == KbLayer::symbols ? KbLayer::lower : KbLayer::symbols;
+    kb_layout_dirty = true;
+  } else if (strcmp(text, "clear") == 0) {
+    memset(kb_password, 0, sizeof(kb_password));
+    kb_length = 0;
+  } else if (strcmp(text, "space") == 0) {
+    kb_append(" ");
+  } else {
+    kb_append(text);
+  }
+
+  kb_render_display();
+}
+
+// A layer swap frees and reallocates the matrix's button array. If that happened
+// while a finger were still down, LVGL would go on to index the freed array with
+// the old button number -- which the shorter layer may not even have. So track
+// the press and let update_keyboard() swap once the finger is up.
+void kb_press_event(lv_event_t *event) {
+  kb_pressing = lv_event_get_code(event) == LV_EVENT_PRESSED;
+}
+
+void kb_cancel_clicked(lv_event_t *) { kb_close(); }
+
+void kb_reveal_clicked(lv_event_t *) {
+  kb_reveal = !kb_reveal;
+  kb_render_display();
+}
+
+void kb_join_clicked(lv_event_t *) {
+  if (state == nullptr || kb_length < kb_min_password) {
+    return;
+  }
+  snprintf(state->join_ssid, sizeof(state->join_ssid), "%s", kb_ssid);
+  snprintf(state->join_password, sizeof(state->join_password), "%s", kb_password);
+  state->join_state = JoinState::requested;
+  kb_close();
+}
+
+void network_clicked(lv_event_t *event) {
+  const uint8_t index = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));
+  if (state == nullptr || index >= state->network_count) {
+    return;
+  }
+
+  const Network &network = state->networks[index];
+  if (network.open) {
+    // Nothing to type, so skip the keyboard entirely.
+    snprintf(state->join_ssid, sizeof(state->join_ssid), "%s", network.ssid);
+    state->join_password[0] = '\0';
+    state->join_state = JoinState::requested;
+    return;
+  }
+
+  kb_open(network.ssid);
+}
+
+void rescan_clicked(lv_event_t *) {
+  if (state != nullptr) {
+    state->join_state = JoinState::none;
+    wifi_start_scan(*state);
+  }
+}
+
+// Keys differ from each other only in color and text size, which a single style
+// cannot express, so they are painted per button here.
+void kb_matrix_draw(lv_event_t *event) {
+  lv_obj_draw_part_dsc_t *dsc = lv_event_get_draw_part_dsc(event);
+  if (dsc->part != LV_PART_ITEMS || dsc->rect_dsc == nullptr) {
+    return;
+  }
+
+  lv_obj_t *matrix = lv_event_get_target(event);
+  const char *text = lv_btnmatrix_get_btn_text(matrix, static_cast<uint16_t>(dsc->id));
+  if (text == nullptr) {
+    return;
+  }
+
+  uint32_t bg = col_key_bg;
+  uint32_t ink = col_text;
+  const lv_font_t *font = font_body;
+
+  if (strcmp(text, LV_SYMBOL_UP) == 0) {
+    const bool latched = kb_layer == KbLayer::upper;
+    bg = latched ? col_accent : col_key_alt;
+    ink = latched ? col_bg_screen : col_key_ink_dim;
+  } else if (strcmp(text, LV_SYMBOL_BACKSPACE) == 0) {
+    bg = col_key_alt;
+    ink = col_key_ink_dim;
+  } else if (strcmp(text, "123") == 0 || strcmp(text, "abc") == 0 || strcmp(text, "clear") == 0) {
+    bg = col_key_alt;
+    ink = col_key_ink_dim;
+    font = font_tiny;
+  } else if (strcmp(text, "space") == 0) {
+    ink = col_outline_ink;
+    font = font_tiny;
+  }
+
+  dsc->rect_dsc->bg_color = lv_color_hex(bg);
+  dsc->rect_dsc->bg_opa = LV_OPA_COVER;
+  dsc->rect_dsc->radius = 4;
+  dsc->rect_dsc->border_width = 0;
+  if (dsc->label_dsc != nullptr) {
+    dsc->label_dsc->color = lv_color_hex(ink);
+    dsc->label_dsc->font = font;
   }
 }
 
@@ -687,7 +1004,120 @@ void build_setup() {
   lv_obj_t *retry_label = make_label(retry, "RETRY", font_tiny, 0xAAB4BD);
   lv_obj_center(retry_label);
 
-  make_label(page, "NETWORK SELECTION COMES IN THE NEXT RELEASE", font_tiny, col_range_dim);
+  make_label(page, "NETWORKS", font_tiny, col_label_dim);
+
+  setup_scan_note = make_label(page, "Scanning...", font_tiny, col_range_dim);
+
+  for (uint8_t i = 0; i < max_networks; ++i) {
+    NetworkUi &ui = network_rows[i];
+    ui.row = make_box(page, &st_panel);
+    lv_obj_set_size(ui.row, LV_PCT(100), 34);
+    lv_obj_set_style_radius(ui.row, 5, 0);
+    set_flex(ui.row, LV_FLEX_FLOW_ROW, 8, LV_FLEX_ALIGN_CENTER);
+    set_pad(ui.row, 0, 9, 0);
+    lv_obj_add_flag(ui.row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(ui.row, network_clicked, LV_EVENT_CLICKED,
+                        reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
+
+    ui.ssid = make_label(ui.row, "", font_small, col_text_strong);
+    lv_obj_set_flex_grow(ui.ssid, 1);
+    ui.rssi = make_label(ui.row, "", font_tiny, col_text_dim);
+    ui.tag = make_label(ui.row, "", font_tiny, col_text_dim);
+
+    show(ui.row, false);
+  }
+
+  lv_obj_t *rescan = make_box(page, &st_plain);
+  lv_obj_set_size(rescan, LV_PCT(100), 32);
+  lv_obj_set_style_radius(rescan, 5, 0);
+  lv_obj_set_style_bg_opa(rescan, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(rescan, 1, 0);
+  set_border_color(rescan, col_border_hi);
+  lv_obj_add_flag(rescan, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(rescan, rescan_clicked, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *rescan_label = make_label(rescan, "RESCAN", font_tiny, col_outline_ink);
+  lv_obj_center(rescan_label);
+}
+
+void build_keyboard(lv_obj_t *screen) {
+  // Covers the content and the tab bar but never the status bar, so the Wi-Fi
+  // and Apex indicators stay readable while typing.
+  kb_overlay = make_box(screen, &st_page);
+  lv_obj_set_size(kb_overlay, 480, 272 - status_bar_h);
+  lv_obj_set_pos(kb_overlay, 0, status_bar_h);
+  set_flex(kb_overlay, LV_FLEX_FLOW_COLUMN, 0, LV_FLEX_ALIGN_START);
+
+  lv_obj_t *header = make_box(kb_overlay, &st_bar);
+  lv_obj_set_size(header, LV_PCT(100), 32);
+  set_flex(header, LV_FLEX_FLOW_ROW, 8, LV_FLEX_ALIGN_CENTER);
+  set_pad(header, 0, 10, 0);
+  lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(header, 1, 0);
+  set_border_color(header, 0x1D222A);
+
+  lv_obj_t *cancel = make_box(header, &st_plain);
+  lv_obj_set_size(cancel, 54, 26);
+  lv_obj_add_flag(cancel, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(cancel, kb_cancel_clicked, LV_EVENT_CLICKED, nullptr);
+  lv_obj_center(make_label(cancel, "CANCEL", font_tiny, col_outline_ink));
+
+  kb_title = make_label(header, "", font_small, col_text_strong);
+  lv_obj_set_flex_grow(kb_title, 1);
+  lv_obj_set_style_text_align(kb_title, LV_TEXT_ALIGN_CENTER, 0);
+
+  kb_join_btn = make_box(header, &st_plain);
+  lv_obj_set_size(kb_join_btn, 54, 26);
+  lv_obj_set_style_radius(kb_join_btn, 4, 0);
+  lv_obj_set_style_bg_opa(kb_join_btn, LV_OPA_COVER, 0);
+  lv_obj_add_flag(kb_join_btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(kb_join_btn, kb_join_clicked, LV_EVENT_CLICKED, nullptr);
+  kb_join_label = make_label(kb_join_btn, "JOIN", font_tiny, col_disabled_ink);
+  lv_obj_center(kb_join_label);
+
+  lv_obj_t *field_row = make_box(kb_overlay, &st_plain);
+  lv_obj_set_size(field_row, LV_PCT(100), 40);
+  set_flex(field_row, LV_FLEX_FLOW_ROW, 6, LV_FLEX_ALIGN_CENTER);
+  set_pad(field_row, 5, 10, 5);
+
+  lv_obj_t *field_box = make_box(field_row, &st_panel);
+  lv_obj_set_height(field_box, 30);
+  lv_obj_set_flex_grow(field_box, 1);
+  lv_obj_set_style_radius(field_box, 4, 0);
+  set_border_color(field_box, col_border_hi);
+  set_pad(field_box, 0, 9, 0);
+  set_flex(field_box, LV_FLEX_FLOW_ROW, 0, LV_FLEX_ALIGN_CENTER);
+  kb_field = make_label(field_box, "Password", font_body, col_text_dim);
+
+  lv_obj_t *reveal = make_box(field_row, &st_plain);
+  lv_obj_set_size(reveal, 52, 30);
+  lv_obj_set_style_radius(reveal, 4, 0);
+  lv_obj_set_style_bg_opa(reveal, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(reveal, 1, 0);
+  set_border_color(reveal, col_border_hi);
+  lv_obj_add_flag(reveal, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(reveal, kb_reveal_clicked, LV_EVENT_CLICKED, nullptr);
+  kb_reveal_label = make_label(reveal, "SHOW", font_tiny, col_outline_ink);
+  lv_obj_center(kb_reveal_label);
+
+  kb_matrix = lv_btnmatrix_create(kb_overlay);
+  lv_obj_remove_style_all(kb_matrix);
+  lv_obj_set_width(kb_matrix, LV_PCT(100));
+  lv_obj_set_flex_grow(kb_matrix, 1);
+  lv_obj_set_style_pad_all(kb_matrix, 0, 0);
+  lv_obj_set_style_pad_left(kb_matrix, 5, 0);
+  lv_obj_set_style_pad_right(kb_matrix, 5, 0);
+  lv_obj_set_style_pad_bottom(kb_matrix, 6, 0);
+  lv_obj_set_style_pad_row(kb_matrix, 4, 0);
+  lv_obj_set_style_pad_column(kb_matrix, 4, 0);
+  lv_obj_set_style_text_font(kb_matrix, font_body, 0);
+  lv_obj_add_event_cb(kb_matrix, kb_key_event, LV_EVENT_VALUE_CHANGED, nullptr);
+  lv_obj_add_event_cb(kb_matrix, kb_matrix_draw, LV_EVENT_DRAW_PART_BEGIN, nullptr);
+  lv_obj_add_event_cb(kb_matrix, kb_press_event, LV_EVENT_PRESSED, nullptr);
+  lv_obj_add_event_cb(kb_matrix, kb_press_event, LV_EVENT_RELEASED, nullptr);
+  lv_obj_add_event_cb(kb_matrix, kb_press_event, LV_EVENT_PRESS_LOST, nullptr);
+  apply_kb_layout();
+
+  show(kb_overlay, false);
 }
 
 void build_sleep(lv_obj_t *screen) {
@@ -721,8 +1151,13 @@ void build_sleep(lv_obj_t *screen) {
 // ---------------------------------------------------------------- update
 
 void update_status_bar() {
-  set_bg_color(wifi_dot, state->wifi_up ? col_accent : col_danger);
-  set_label(wifi_label, state->wifi_up ? "WI-FI" : "NO WI-FI");
+  // Joining takes the radio down and blocks, so this is the last frame drawn
+  // before everything stalls -- the dot has to say so rather than sitting green
+  // on a connection that is already gone.
+  const bool joining =
+      state->join_state == JoinState::requested || state->join_state == JoinState::running;
+  set_bg_color(wifi_dot, joining ? col_warn : (state->wifi_up ? col_accent : col_danger));
+  set_label(wifi_label, joining ? "JOINING" : (state->wifi_up ? "WI-FI" : "NO WI-FI"));
   set_bg_color(apex_dot, state->apex_up ? col_accent : col_danger);
   set_label(apex_label, state->apex_up ? "APEX" : "APEX X");
 }
@@ -941,6 +1376,8 @@ void update_alerts() {
   }
 }
 
+void update_networks(uint32_t now);
+
 void update_setup() {
   // WiFi.SSID() builds a String, so this is paced rather than run every frame.
   static uint32_t last_run = 0;
@@ -972,6 +1409,96 @@ void update_setup() {
     snprintf(text, sizeof(text), "apex.local " GLYPH_BULLET " no reply yet");
   }
   set_label(setup_apex_meta, text);
+
+  update_networks(now);
+}
+
+void update_networks(uint32_t now) {
+  // A result is worth reading for a few seconds, then the note goes back to
+  // describing the list.
+  static JoinState shown_join = JoinState::none;
+  static uint32_t join_shown_ms = 0;
+  if (state->join_state != shown_join) {
+    shown_join = state->join_state;
+    join_shown_ms = now;
+  }
+  const bool join_settled =
+      state->join_state == JoinState::succeeded || state->join_state == JoinState::failed;
+  if (join_settled && now - join_shown_ms > join_result_linger_ms) {
+    state->join_state = JoinState::none;
+  }
+
+  // First visit to the tab kicks off a scan; after that it takes a RESCAN.
+  if (state->scan_state == ScanState::idle) {
+    wifi_start_scan(*state);
+  }
+
+  char note[64];
+  switch (state->join_state) {
+    case JoinState::requested:
+    case JoinState::running:
+      snprintf(note, sizeof(note), "Joining %s...", state->join_ssid);
+      break;
+    case JoinState::succeeded:
+      snprintf(note, sizeof(note), "Joined %s", state->join_ssid);
+      break;
+    case JoinState::failed:
+      snprintf(note, sizeof(note), "Could not join %s", state->join_ssid);
+      break;
+    default:
+      if (state->scan_state == ScanState::running) {
+        snprintf(note, sizeof(note), "Scanning...");
+      } else if (state->scan_state == ScanState::failed) {
+        snprintf(note, sizeof(note), "Scan failed - tap RESCAN");
+      } else if (state->network_count == 0) {
+        snprintf(note, sizeof(note), "No networks found");
+      } else {
+        snprintf(note, sizeof(note), "Tap a network to join");
+      }
+      break;
+  }
+  set_label(setup_scan_note, note);
+  set_text_color(setup_scan_note, state->join_state == JoinState::failed ? col_danger
+                                                                        : col_range_dim);
+
+  for (uint8_t i = 0; i < max_networks; ++i) {
+    NetworkUi &ui = network_rows[i];
+    if (i >= state->network_count) {
+      show(ui.row, false);
+      continue;
+    }
+    show(ui.row, true);
+
+    const Network &network = state->networks[i];
+    set_label(ui.ssid, network.ssid);
+
+    char rssi_text[12];
+    snprintf(rssi_text, sizeof(rssi_text), "%d dBm", network.rssi);
+    set_label(ui.rssi, rssi_text);
+
+    set_label(ui.tag, network.saved ? "SAVED" : (network.open ? "OPEN" : "JOIN"));
+    set_text_color(ui.tag, network.saved ? col_accent : col_text_dim);
+    set_bg_color(ui.row, network.saved ? 0x141D1B : col_panel);
+    set_border_color(ui.row, network.saved ? col_accent : col_border);
+    set_border_opa(ui.row, network.saved ? LV_OPA_40 : LV_OPA_COVER);
+  }
+}
+
+void update_keyboard() {
+  // Runs from loop(), so LVGL is no longer dispatching on the matrix; waiting
+  // for the finger to lift makes the re-map safe.
+  if (kb_layout_dirty && !kb_pressing) {
+    apply_kb_layout();
+    kb_layout_dirty = false;
+  }
+
+  set_label(kb_field, kb_display);
+  set_text_color(kb_field, kb_length == 0 ? col_text_dim : col_text);
+  set_label(kb_reveal_label, kb_reveal ? "HIDE" : "SHOW");
+
+  const bool can_join = kb_length >= kb_min_password;
+  set_bg_color(kb_join_btn, can_join ? col_accent : col_inactive_bg);
+  set_text_color(kb_join_label, can_join ? col_bg_screen : col_disabled_ink);
 }
 
 }  // namespace
@@ -998,6 +1525,7 @@ void ui_create(ReefState *reef_state, const UiHooks &ui_hooks) {
   build_alerts();
   build_setup();
   build_tab_bar(screen);
+  build_keyboard(screen);
   build_sleep(screen);
 
   go_to_tab(tab_home);
@@ -1009,6 +1537,12 @@ void ui_update() {
   }
   update_status_bar();
   update_tabs();
+
+  if (!lv_obj_has_flag(kb_overlay, LV_OBJ_FLAG_HIDDEN)) {
+    // The keyboard covers the pages, so nothing behind it needs refreshing.
+    update_keyboard();
+    return;
+  }
 
   // Only the visible page is worth refreshing; the other three are hidden and
   // rebuilding them would just burn cycles.
@@ -1032,6 +1566,17 @@ void ui_update() {
 
 void ui_service_actions() {
   if (state == nullptr) {
+    return;
+  }
+
+  // Joining takes the radio down for several seconds. Burn one iteration first
+  // so lv_timer_handler() paints "Joining..." before everything stalls.
+  if (state->join_state == JoinState::requested) {
+    state->join_state = JoinState::running;
+    return;
+  }
+  if (state->join_state == JoinState::running) {
+    wifi_run_join(*state);
     return;
   }
 
