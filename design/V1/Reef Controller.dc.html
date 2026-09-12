@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  body { margin: 0; background: #14161a; }
+  a { color: #6fd6c4; }
+  a:hover { color: #9fe7db; }
+  @keyframes idlepulse { 0%,100% { opacity: .22; transform: scale(1); } 50% { opacity: .6; transform: scale(1.35); } }
+  @keyframes warnpulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+  .scr::-webkit-scrollbar { width: 3px; }
+  .scr::-webkit-scrollbar-thumb { background: #3a4048; border-radius: 3px; }
+</style>
+</helmet>
+<div style="min-height: 100vh; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; gap: 18px; font-family: Archivo, Helvetica, sans-serif; background: radial-gradient(120% 90% at 50% 0%, #1c2026 0%, #101216 70%);">
+
+  <div style="display: flex; align-items: baseline; gap: 14px; color: #6b747e; font-size: 12px; letter-spacing: .16em; text-transform: uppercase;">
+    <span style="color: #c7ced6; letter-spacing: .12em;">Reef Controller</span>
+    <span>480 &times; 272 &middot; 4.3&quot; ESP32</span>
+  </div>
+
+  <div style="width: {{ frameW }}px; height: {{ frameH }}px; padding: 14px; border-radius: 20px; background: linear-gradient(#2a2f36, #1a1e23); box-shadow: 0 30px 60px -20px #000, inset 0 1px 0 #40464f;">
+    <div style="width: {{ frameW }}px; height: {{ frameH }}px; border-radius: 8px; overflow: hidden; position: relative; background: #000;">
+      <div onClick="{{ onTouch }}" style="width: 480px; height: 272px; transform: scale({{ scale }}); transform-origin: top left; position: relative; overflow: hidden; background: #0b0d10; color: #e6ebf0; user-select: none; cursor: pointer;">
+
+        <sc-if value="{{ asleep }}" hint-placeholder-val="{{ false }}">
+          <div style="position: absolute; inset: 0; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 20;">
+            <div style="width: 56px; height: 64px; opacity: .07; background: {{ accent }}; -webkit-mask: url(robonerd-mark.svg) center / contain no-repeat; mask: url(robonerd-mark.svg) center / contain no-repeat;"></div>
+            <div style="width: 10px; height: 10px; border-radius: 50%; background: {{ accent }}; animation: idlepulse 3.4s ease-in-out infinite;"></div>
+            <div style="position: absolute; bottom: 14px; left: 0; right: 0; text-align: center; font-size: 9px; letter-spacing: .3em; color: #1d2227; text-transform: uppercase;">touch</div>
+          </div>
+        </sc-if>
+
+        <div style="height: 30px; display: flex; align-items: center; gap: 10px; padding: 0 12px; background: #11141a; border-bottom: 1px solid #1d222a;">
+          <div style="width: 15px; height: 17px; background: {{ accent }}; -webkit-mask: url(robonerd-mark.svg) center / contain no-repeat; mask: url(robonerd-mark.svg) center / contain no-repeat; flex: none;"></div>
+          <div style="width: 1px; height: 12px; background: #262c34;"></div>
+          <div onClick="{{ goSetup }}" style="display: flex; align-items: center; gap: 6px; height: 30px; padding-right: 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #7d8791;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: {{ wifiDot }};"></span>
+            <span>{{ wifiLabel }}</span>
+          </div>
+          <div style="width: 1px; height: 12px; background: #262c34;"></div>
+          <div onClick="{{ goSetup }}" style="display: flex; align-items: center; gap: 6px; height: 30px; padding-left: 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #7d8791;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: {{ apexDot }};"></span>
+            <span>{{ apexLabel }}</span>
+          </div>
+          <div style="flex: 1;"></div>
+          <div onClick="{{ sleepNow }}" style="width: 44px; height: 30px; margin-right: -12px; display: flex; align-items: center; justify-content: center; gap: 4px; border-left: 1px solid #1d222a; color: #8d979f;">
+            <span style="position: relative; width: 13px; height: 13px; border-radius: 50%; border: 2px solid currentColor; box-sizing: border-box;" style-before="content: ''; position: absolute; left: 50%; top: -3px; width: 2px; height: 6px; background: currentColor; transform: translateX(-1px); box-shadow: 0 0 0 2px #11141a;"></span>
+          </div>
+        </div>
+
+        <div class="scr" style="position: absolute; top: 30px; bottom: 38px; left: 0; right: 0; overflow-y: auto; overflow-x: hidden;">
+
+          <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+            <div style="padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px;">
+              <sc-if value="{{ hasWarning }}" hint-placeholder-val="{{ true }}">
+                <div onClick="{{ goAlerts }}" style="display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 5px; background: {{ warnBg }}; border-left: 3px solid {{ warnInk }};">
+                  <span style="width: 7px; height: 7px; border-radius: 50%; background: {{ warnInk }}; animation: warnpulse 1.6s ease-in-out infinite;"></span>
+                  <span style="font-size: 11px; font-weight: 600; letter-spacing: .04em; color: {{ warnInk }};">{{ warnText }}</span>
+                  <span style="flex: 1;"></span>
+                  <span style="font-size: 10px; color: {{ warnInk }}; opacity: .7; letter-spacing: .1em;">VIEW</span>
+                </div>
+              </sc-if>
+
+              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                <sc-for list="{{ readings }}" as="r" hint-placeholder-count="3">
+                  <div style="background: #12161c; border: 1px solid #1e242c; border-radius: 6px; padding: 5px 8px 6px; display: flex; flex-direction: column; gap: 1px;">
+                    <div style="font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #78838e;">{{ r.label }}</div>
+                    <div style="display: flex; align-items: baseline; gap: 3px;">
+                      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 27px; font-weight: 500; line-height: 1; color: {{ r.ink }};">{{ r.value }}</span>
+                      <span style="font-size: 10px; color: #6b757f;">{{ r.unit }}</span>
+                    </div>
+                    <svg viewBox="0 0 100 22" preserveAspectRatio="none" style="width: 100%; height: 16px; display: block; margin: 1px 0;">
+                      <polyline points="{{ r.spark }}" fill="none" stroke="{{ r.sparkInk }}" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"></polyline>
+                    </svg>
+                    <div style="font-size: 9px; color: #5f6a74; font-family: 'IBM Plex Mono', monospace;">{{ r.range }}</div>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div onClick="{{ onFeed }}" style="height: 52px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: {{ feedBg }}; border: 1px solid {{ feedBorder }};">
+                <div style="display: flex; align-items: baseline; gap: 10px;">
+                  <span style="font-size: 15px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase; color: {{ feedInk }};">{{ feedLabel }}</span>
+                  <sc-if value="{{ feeding }}" hint-placeholder-val="{{ false }}">
+                    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 18px; color: {{ feedInk }};">{{ feedClock }}</span>
+                  </sc-if>
+                </div>
+                <span style="font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: #58626c;">{{ feedHint }}</span>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isControl }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 5px;">
+              <sc-for list="{{ outlets }}" as="o" hint-placeholder-count="6">
+                <div style="display: flex; align-items: center; gap: 8px; background: #12161c; border: 1px solid {{ o.border }}; border-radius: 6px; padding: 5px 6px 5px 9px;">
+                  <div style="flex: 1; min-width: 0;">
+                    <div style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #dbe2e9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ o.name }}</div>
+                    <div style="font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: {{ o.stateInk }};">{{ o.stateText }}</div>
+                  </div>
+                  <div style="display: flex; gap: 3px;">
+                    <div onClick="{{ o.setOff }}" style="width: 52px; height: 32px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; letter-spacing: .1em; background: {{ o.offBg }}; color: {{ o.offInk }};">OFF</div>
+                    <div onClick="{{ o.setAuto }}" style="width: 58px; height: 32px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; letter-spacing: .1em; background: {{ o.autoBg }}; color: {{ o.autoInk }};">AUTO</div>
+                    <div onClick="{{ o.setOn }}" style="width: 52px; height: 32px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; letter-spacing: .1em; background: {{ o.onBg }}; color: {{ o.onInk }};">ON</div>
+                  </div>
+                </div>
+              </sc-for>
+              <div onClick="{{ allAuto }}" style="margin-top: 3px; height: 34px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: #0b0d10; background: {{ accent }};">Return all to auto</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isAlerts }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 5px;">
+              <sc-for list="{{ alerts }}" as="a" hint-placeholder-count="4">
+                <div style="display: flex; align-items: center; gap: 9px; background: #12161c; border: 1px solid #1e242c; border-left: 3px solid {{ a.ink }}; border-radius: 5px; padding: 7px 9px;">
+                  <div style="flex: 1; min-width: 0;">
+                    <div style="font-size: 11px; font-weight: 600; color: #dbe2e9;">{{ a.title }}</div>
+                    <div style="font-size: 10px; color: #6f7a84;">{{ a.detail }}</div>
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #5f6a74;">{{ a.time }}</div>
+                </div>
+              </sc-for>
+              <div onClick="{{ clearAlerts }}" style="margin-top: 3px; height: 32px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: #8d979f; border: 1px solid #262c34;">Acknowledge all</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isSetup }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 6px;">
+              <div style="background: #12161c; border: 1px solid #1e242c; border-radius: 6px; padding: 8px 9px; display: flex; align-items: center; gap: 9px;">
+                <div style="flex: 1;">
+                  <div style="font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #78838e;">Wi-Fi</div>
+                  <div style="font-size: 12px; font-weight: 600; color: #dbe2e9;">{{ wifiSsid }}</div>
+                  <div style="font-size: 9px; font-family: 'IBM Plex Mono', monospace; color: #6f7a84;">{{ wifiMeta }}</div>
+                </div>
+              </div>
+
+              <div style="background: #12161c; border: 1px solid #1e242c; border-radius: 6px; padding: 8px 9px; display: flex; align-items: center; gap: 9px;">
+                <div style="flex: 1;">
+                  <div style="font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #78838e;">Apex link</div>
+                  <div style="font-size: 12px; font-weight: 600; color: {{ apexDot }};">{{ apexStateText }}</div>
+                  <div style="font-size: 9px; font-family: 'IBM Plex Mono', monospace; color: #6f7a84;">{{ apexMeta }}</div>
+                </div>
+                <div onClick="{{ retryApex }}" style="width: 74px; height: 32px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; border: 1px solid #2b323b; color: #aab4bd;">Retry</div>
+              </div>
+
+              <div style="font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #78838e; padding-left: 2px;">Networks</div>
+              <sc-for list="{{ networks }}" as="n" hint-placeholder-count="3">
+                <div onClick="{{ n.pick }}" style="display: flex; align-items: center; gap: 8px; background: {{ n.bg }}; border: 1px solid {{ n.border }}; border-radius: 5px; padding: 7px 9px; height: 34px; box-sizing: border-box;">
+                  <div style="flex: 1; font-size: 11px; font-weight: 500; color: #dbe2e9;">{{ n.ssid }}</div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #6f7a84;">{{ n.rssi }}</div>
+                  <div style="font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: {{ n.tagInk }};">{{ n.tag }}</div>
+                </div>
+              </sc-for>
+              <div onClick="{{ rescan }}" style="margin-top: 2px; height: 32px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #8d979f; border: 1px solid #262c34;">Rescan</div>
+            </div>
+          </sc-if>
+        </div>
+
+        <sc-if value="{{ kbOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position: absolute; top: 30px; left: 0; right: 0; bottom: 0; z-index: 15; background: #0b0d10; display: flex; flex-direction: column;">
+            <div style="height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #11141a; border-bottom: 1px solid #1d222a;">
+              <div onClick="{{ kbCancel }}" style="width: 54px; height: 26px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #8d979f;">Cancel</div>
+              <div style="flex: 1; text-align: center; font-size: 11px; font-weight: 600; letter-spacing: .04em; color: #dbe2e9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ kbSsid }}</div>
+              <div onClick="{{ kbJoin }}" style="width: 54px; height: 26px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; background: {{ kbJoinBg }}; color: {{ kbJoinInk }};">Join</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; padding: 5px 10px;">
+              <div style="flex: 1; height: 30px; border-radius: 4px; background: #12161c; border: 1px solid #262c34; display: flex; align-items: center; padding: 0 9px; font-family: 'IBM Plex Mono', monospace; font-size: 14px; letter-spacing: .08em; color: #e6ebf0; overflow: hidden; white-space: nowrap;">{{ kbDisplay }}</div>
+              <div onClick="{{ kbToggleReveal }}" style="width: 52px; height: 30px; border-radius: 4px; border: 1px solid #262c34; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #8d979f;">{{ kbRevealLabel }}</div>
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 0 5px 6px;">
+              <sc-for list="{{ kbRows }}" as="row" hint-placeholder-count="4">
+                <div style="flex: 1; display: flex; gap: 4px;">
+                  <sc-for list="{{ row.keys }}" as="k" hint-placeholder-count="10">
+                    <div onClick="{{ k.press }}" style="flex: {{ k.flex }}; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: {{ k.size }}; font-weight: 500; color: {{ k.ink }}; background: {{ k.bg }};">{{ k.label }}</div>
+                  </sc-for>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 38px; display: grid; grid-template-columns: repeat(4, 1fr); background: #11141a; border-top: 1px solid #1d222a;">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4">
+            <div onClick="{{ t.go }}" style="display: flex; align-items: center; justify-content: center; gap: 5px; border-top: 2px solid {{ t.mark }}; background: {{ t.bg }};">
+              <span style="font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: {{ t.ink }};">{{ t.label }}</span>
+              <sc-if value="{{ t.badge }}" hint-placeholder-val="{{ false }}">
+                <span style="min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: 7px; background: {{ warnInk }}; color: #0b0d10; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center;">{{ t.badgeCount }}</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width: 640px; font-size: 11px; line-height: 1.6; color: #6b747e;">
+    Tap the screen to wake it; the power button at the top right puts it back to the idle dot. {{ idleNote }} FEED runs the pre-programmed 15-minute cycle; anything left off AUTO raises the banner and the CONTROL badge until it goes back.
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#5fd3bf&quot;,&quot;options&quot;:[&quot;#5fd3bf&quot;,&quot;#7fb2f0&quot;,&quot;#b8c96a&quot;,&quot;#d99a7a&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Look&quot;},&quot;warnColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#e9a23b&quot;,&quot;options&quot;:[&quot;#e9a23b&quot;,&quot;#e4655c&quot;,&quot;#d7c14a&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Look&quot;},&quot;scale&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:null,&quot;options&quot;:[1,2,3],&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Preview&quot;,&quot;unit&quot;:&quot;x&quot;},&quot;idleSeconds&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:0,&quot;min&quot;:0,&quot;max&quot;:300,&quot;step&quot;:15,&quot;unit&quot;:&quot;s (0 = never)&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Behavior&quot;}}">
+const OUTLETS = [
+  { id: "return", name: "Return pump", mode: "auto", live: true },
+  { id: "skimmer", name: "Skimmer", mode: "auto", live: true },
+  { id: "heater", name: "Heater", mode: "auto", live: false },
+  { id: "wave", name: "Wavemaker", mode: "auto", live: true },
+  { id: "light", name: "Display light", mode: "auto", live: true },
+  { id: "ato", name: "ATO", mode: "auto", live: false },
+  { id: "alk", name: "Alk doser", mode: "off", live: false },
+  { id: "ca", name: "Ca doser", mode: "auto", live: false },
+  { id: "uv", name: "UV sterilizer", mode: "auto", live: true }
+];
+
+class Component extends DCLogic {
+  state = {
+    tab: "home",
+    asleep: true,
+    lastTouch: Date.now(),
+    now: new Date(),
+    outlets: OUTLETS.map(o => Object.assign({}, o)),
+    feedEndsAt: null,
+    wifiOn: true,
+    ssid: "SUMPROOM-5G",
+    apex: "linked",
+    acked: false,
+    autoScale: 1,
+    kbSsid: null,
+    pw: "",
+    reveal: false,
+    shift: false,
+    numMode: false
+  };
+
+  key(ch) {
+    this.setState(s => ({
+      pw: (s.pw + (s.shift ? ch.toUpperCase() : ch)).slice(0, 63),
+      shift: false,
+      lastTouch: Date.now()
+    }));
+  }
+
+  fit = () => {
+    const w = document.documentElement.clientWidth || 480;
+    const s = Math.min(3, Math.max(1, Math.floor(((w - 68) / 480) * 20) / 20));
+    if (s !== this.state.autoScale) this.setState({ autoScale: s });
+  };
+
+  componentDidMount() {
+    this.fit();
+    window.addEventListener("resize", this.fit);
+    this.timer = setInterval(() => {
+      const s = this.state;
+      const idleSecs = this.props.idleSeconds ?? 0;
+      const next = { now: new Date() };
+      if (idleSecs > 0 && !s.asleep && Date.now() - s.lastTouch > idleSecs * 1000) next.asleep = true;
+      if (s.feedEndsAt && Date.now() >= s.feedEndsAt) {
+        next.feedEndsAt = null;
+        next.outlets = s.outlets.map(o => o.id === "return" ? Object.assign({}, o, { mode: "auto", live: true }) : o);
+      }
+      this.setState(next);
+    }, 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); window.removeEventListener("resize", this.fit); }
+
+  touch = () => {
+    this.setState(s => s.asleep ? { asleep: false, lastTouch: Date.now(), tab: "home" } : { lastTouch: Date.now() });
+  };
+
+  sleep = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    this.setState({ asleep: true });
+  };
+
+  setMode(id, mode) {
+    this.setState(s => ({
+      lastTouch: Date.now(),
+      outlets: s.outlets.map(o => o.id === id ? Object.assign({}, o, { mode, live: mode === "on" ? true : mode === "off" ? false : o.live }) : o)
+    }));
+  }
+
+  pad(n) { return String(n).padStart(2, "0"); }
+
+  keyRows(accent) {
+    const s = this.state;
+    const letterRows = s.numMode
+      ? [["1","2","3","4","5","6","7","8","9","0"], ["-","/",":",";","(",")","$","&","@","\""], [".",",","?","!","'","*","#","%","+","="]]
+      : [["q","w","e","r","t","y","u","i","o","p"], ["a","s","d","f","g","h","j","k","l"], ["z","x","c","v","b","n","m"]];
+
+    const ch = c => ({
+      label: s.shift && !s.numMode ? c.toUpperCase() : c,
+      flex: "1 1 0", size: "14px", ink: "#e6ebf0", bg: "#1b212a",
+      press: () => this.key(c)
+    });
+
+    const rows = letterRows.map((r, i) => {
+      const keys = r.map(ch);
+      if (!s.numMode && i === 1) {
+        keys.unshift({ label: "", flex: "0.5 1 0", size: "12px", ink: "#e6ebf0", bg: "transparent", press: () => {} });
+        keys.push({ label: "", flex: "0.5 1 0", size: "12px", ink: "#e6ebf0", bg: "transparent", press: () => {} });
+      }
+      if (i === 2) {
+        keys.unshift({
+          label: "⇧", flex: "1.6 1 0", size: "14px",
+          ink: s.shift ? "#0b0d10" : "#aab4bd", bg: s.shift ? accent : "#141a21",
+          press: () => this.setState(st => ({ shift: !st.shift, lastTouch: Date.now() }))
+        });
+        keys.push({
+          label: "⌫", flex: "1.6 1 0", size: "14px", ink: "#aab4bd", bg: "#141a21",
+          press: () => this.setState(st => ({ pw: st.pw.slice(0, -1), lastTouch: Date.now() }))
+        });
+      }
+      return { keys };
+    });
+
+    rows.push({ keys: [
+      { label: s.numMode ? "abc" : "123", flex: "1.8 1 0", size: "11px", ink: "#aab4bd", bg: "#141a21",
+        press: () => this.setState(st => ({ numMode: !st.numMode, shift: false, lastTouch: Date.now() })) },
+      { label: "space", flex: "6 1 0", size: "10px", ink: "#8d979f", bg: "#1b212a", press: () => this.key(" ") },
+      { label: "_", flex: "1.2 1 0", size: "14px", ink: "#e6ebf0", bg: "#1b212a", press: () => this.key("_") },
+      { label: "clear", flex: "1.8 1 0", size: "10px", ink: "#aab4bd", bg: "#141a21",
+        press: () => this.setState({ pw: "", lastTouch: Date.now() }) }
+    ] });
+
+    return rows;
+  }
+
+  renderVals() {
+    const s = this.state;
+    const accent = this.props.accent ?? "#5fd3bf";
+    const warnInk = this.props.warnColor ?? "#e9a23b";
+    const scale = this.props.scale ?? s.autoScale ?? 1;
+    const asleep = s.asleep;
+
+    const overrides = s.outlets.filter(o => o.mode !== "auto");
+    const feeding = !!s.feedEndsAt;
+    const feedLeft = feeding ? Math.max(0, Math.round((s.feedEndsAt - Date.now()) / 1000)) : 0;
+
+    const nonFeedOverrides = overrides.filter(o => !(feeding && o.id === "return"));
+    const alerts = [];
+    nonFeedOverrides.forEach(o => alerts.push({
+      ink: warnInk, title: o.name + " left " + o.mode.toUpperCase(),
+      detail: "Manual override — not following program", time: "now"
+    }));
+    if (s.apex !== "linked") alerts.push({ ink: "#e4655c", title: "Apex link lost", detail: "No reply from controller", time: "now" });
+    if (!s.acked) alerts.push({ ink: "#6f7a84", title: "pH low 7.94", detail: "Cleared after 12 min", time: "03:41" });
+    if (!alerts.length) alerts.push({ ink: accent, title: "All clear", detail: "Everything on program", time: "—" });
+
+    const warnCount = nonFeedOverrides.length + (s.apex !== "linked" ? 1 : 0);
+    const warnText = warnCount === 0 ? ""
+      : nonFeedOverrides.length === 1 && s.apex === "linked"
+        ? nonFeedOverrides[0].name + " is " + nonFeedOverrides[0].mode.toUpperCase() + " — not in auto"
+        : warnCount + " outlets out of auto";
+
+    const spark = series => {
+      const lo = Math.min.apply(null, series), hi = Math.max.apply(null, series);
+      const span = hi - lo || 1;
+      return series.map((v, i) => {
+        const x = (i / (series.length - 1)) * 100;
+        const y = 20 - ((v - lo) / span) * 18;
+        return (Math.round(x * 10) / 10) + "," + (Math.round(y * 10) / 10);
+      }).join(" ");
+    };
+
+    const readings = [
+      { label: "Temp", value: "78.4", unit: "°F", range: "77.9 – 78.6", ink: "#e6ebf0",
+        data: [78.0, 77.9, 77.9, 78.0, 78.1, 78.3, 78.5, 78.6, 78.5, 78.4, 78.2, 78.1, 78.0, 78.1, 78.3, 78.4] },
+      { label: "pH", value: "8.11", unit: "", range: "8.02 – 8.24", ink: "#e6ebf0",
+        data: [8.05, 8.02, 8.03, 8.06, 8.11, 8.17, 8.22, 8.24, 8.21, 8.18, 8.14, 8.10, 8.07, 8.05, 8.08, 8.11] },
+      { label: "Salinity", value: "35.1", unit: "ppt", range: "34.9 – 35.2", ink: "#e6ebf0",
+        data: [35.0, 35.0, 34.9, 34.9, 35.0, 35.1, 35.1, 35.2, 35.1, 35.0, 34.9, 35.0, 35.1, 35.1, 35.0, 35.1] }
+    ].map(r => Object.assign({}, r, { spark: spark(r.data), sparkInk: accent }));
+
+    const modeStyle = (active, kind) => {
+      if (!active) return { bg: "#181d24", ink: "#7c8691" };
+      if (kind === "auto") return { bg: accent, ink: "#0b0d10" };
+      if (kind === "on") return { bg: "#3f6f63", ink: "#eafaf6" };
+      return { bg: "#4a3a24", ink: warnInk };
+    };
+
+    const outlets = s.outlets.map(o => {
+      const off = modeStyle(o.mode === "off", "off");
+      const auto = modeStyle(o.mode === "auto", "auto");
+      const on = modeStyle(o.mode === "on", "on");
+      return {
+        name: o.name,
+        border: o.mode === "auto" ? "#1e242c" : warnInk + "66",
+        stateText: o.mode === "auto" ? (o.live ? "Auto · on" : "Auto · off") : "Manual " + o.mode.toUpperCase(),
+        stateInk: o.mode === "auto" ? "#6f7a84" : warnInk,
+        offBg: off.bg, offInk: off.ink, autoBg: auto.bg, autoInk: auto.ink, onBg: on.bg, onInk: on.ink,
+        setOff: () => this.setMode(o.id, "off"),
+        setAuto: () => this.setMode(o.id, "auto"),
+        setOn: () => this.setMode(o.id, "on")
+      };
+    });
+
+    const tabDefs = [
+      { id: "home", label: "Home" },
+      { id: "control", label: "Control", badge: warnCount > 0, badgeCount: String(warnCount) },
+      { id: "alerts", label: "Alerts" },
+      { id: "setup", label: "Setup" }
+    ];
+
+    const nets = [
+      { ssid: "SUMPROOM-5G", rssi: "-48" },
+      { ssid: "FISHROOM-IOT", rssi: "-61" },
+      { ssid: "Neighbour_2G", rssi: "-79" }
+    ];
+
+    return {
+      accent, warnInk, scale,
+      frameW: Math.round(480 * scale), frameH: Math.round(272 * scale),
+      idleSeconds: this.props.idleSeconds ?? 0,
+      idleNote: (this.props.idleSeconds ?? 0) > 0
+        ? "It dims back to the idle dot after " + (this.props.idleSeconds ?? 0) + "s of no touch, or instantly with the power button."
+        : "It stays awake until you press the power button — no auto-dimming.",
+      asleep,
+      onTouch: this.touch,
+      goSetup: (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        this.setState({ tab: "setup", kbSsid: null, asleep: false, lastTouch: Date.now() });
+      },
+      wifiDot: s.wifiOn ? accent : "#e4655c",
+      wifiLabel: s.wifiOn ? "Wi-Fi" : "No Wi-Fi",
+      apexDot: s.apex === "linked" ? accent : "#e4655c",
+      apexLabel: s.apex === "linked" ? "Apex" : "Apex ✕",
+
+      isHome: s.tab === "home", isControl: s.tab === "control", isAlerts: s.tab === "alerts", isSetup: s.tab === "setup",
+
+      hasWarning: warnCount > 0,
+      warnText,
+      warnBg: "#231c10",
+      goAlerts: () => this.setState({ tab: "alerts", lastTouch: Date.now() }),
+
+      readings,
+      feeding,
+      feedLabel: feeding ? "Feeding" : "Feed",
+      feedClock: this.pad(Math.floor(feedLeft / 60)) + ":" + this.pad(feedLeft % 60),
+      feedBg: feeding ? "#231c10" : "#141a20",
+      feedBorder: feeding ? warnInk : "#28303a",
+      feedInk: feeding ? warnInk : accent,
+      feedHint: feeding ? "Tap to cancel · return resumes" : "Pre-programmed 15 min cycle",
+      onFeed: () => {
+        if (s.feedEndsAt) {
+          this.setState(st => ({
+            feedEndsAt: null, lastTouch: Date.now(),
+            outlets: st.outlets.map(o => o.id === "return" ? Object.assign({}, o, { mode: "auto", live: true }) : o)
+          }));
+        } else {
+          this.setState(st => ({
+            feedEndsAt: Date.now() + 15 * 60 * 1000, lastTouch: Date.now(),
+            outlets: st.outlets.map(o => o.id === "return" ? Object.assign({}, o, { mode: "off", live: false }) : o)
+          }));
+        }
+      },
+
+      outlets,
+      allAuto: () => this.setState(st => ({
+        lastTouch: Date.now(), feedEndsAt: null,
+        outlets: st.outlets.map(o => Object.assign({}, o, { mode: "auto" }))
+      })),
+
+      alerts,
+      clearAlerts: () => this.setState({ acked: true, lastTouch: Date.now() }),
+
+      wifiSsid: s.ssid,
+      wifiMeta: "192.168.1.42 · -48 dBm · WPA2",
+      apexStateText: s.apex === "linked" ? "Connected" : "Disconnected",
+      apexMeta: s.apex === "linked" ? "apex.local · last reply 2 s ago" : "apex.local · no reply for 4 min",
+      retryApex: () => this.setState(st => ({ apex: st.apex === "linked" ? "lost" : "linked", lastTouch: Date.now() })),
+      networks: nets.map(n => ({
+        ssid: n.ssid, rssi: n.rssi + " dBm",
+        bg: n.ssid === s.ssid ? "#141d1b" : "#12161c",
+        border: n.ssid === s.ssid ? accent + "55" : "#1e242c",
+        tag: n.ssid === s.ssid ? "Saved" : "Join",
+        tagInk: n.ssid === s.ssid ? accent : "#6f7a84",
+        pick: () => this.setState({ kbSsid: n.ssid, pw: "", reveal: false, shift: false, numMode: false, lastTouch: Date.now() })
+      })),
+      rescan: () => this.setState({ lastTouch: Date.now() }),
+      sleepNow: this.sleep,
+
+      kbOpen: !!s.kbSsid,
+      kbSsid: s.kbSsid ? "Join " + s.kbSsid : "",
+      kbDisplay: s.pw ? (s.reveal ? s.pw : "•".repeat(s.pw.length)) : "Password",
+      kbRevealLabel: s.reveal ? "Hide" : "Show",
+      kbToggleReveal: () => this.setState(st => ({ reveal: !st.reveal, lastTouch: Date.now() })),
+      kbJoinBg: s.pw.length >= 8 ? accent : "#181d24",
+      kbJoinInk: s.pw.length >= 8 ? "#0b0d10" : "#4d565f",
+      kbJoin: () => {
+        if (s.pw.length < 8) return;
+        this.setState({ ssid: s.kbSsid, kbSsid: null, pw: "", lastTouch: Date.now() });
+      },
+      kbCancel: () => this.setState({ kbSsid: null, pw: "", lastTouch: Date.now() }),
+      kbRows: this.keyRows(accent),
+
+      tabs: tabDefs.map(t => ({
+        label: t.label,
+        badge: !!t.badge,
+        badgeCount: t.badgeCount || "",
+        mark: s.tab === t.id ? accent : "transparent",
+        bg: s.tab === t.id ? "#151a21" : "transparent",
+        ink: s.tab === t.id ? "#e6ebf0" : "#6f7a84",
+        go: () => this.setState({ tab: t.id, lastTouch: Date.now() })
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>
