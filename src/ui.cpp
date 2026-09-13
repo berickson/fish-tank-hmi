@@ -100,6 +100,7 @@ lv_obj_t *setup_wifi_meta;
 lv_obj_t *setup_apex_state;
 lv_obj_t *setup_apex_meta;
 lv_obj_t *setup_scan_note;
+lv_obj_t *setup_display_state;
 
 struct NetworkUi {
   lv_obj_t *row;
@@ -383,6 +384,12 @@ void feed_clicked(lv_event_t *) {
 void ack_clicked(lv_event_t *) {
   if (state != nullptr) {
     state->clear_events();
+  }
+}
+
+void flip_clicked(lv_event_t *) {
+  if (state != nullptr && hooks.set_display_flipped != nullptr) {
+    hooks.set_display_flipped(!state->display_flipped);
   }
 }
 
@@ -1004,6 +1011,30 @@ void build_setup() {
   lv_obj_t *retry_label = make_label(retry, "RETRY", font_tiny, 0xAAB4BD);
   lv_obj_center(retry_label);
 
+  lv_obj_t *display_card = make_box(page, &st_panel);
+  lv_obj_set_size(display_card, LV_PCT(100), LV_SIZE_CONTENT);
+  set_flex(display_card, LV_FLEX_FLOW_ROW, 9, LV_FLEX_ALIGN_CENTER);
+  set_pad(display_card, 8, 9, 8);
+
+  lv_obj_t *display_info = make_box(display_card, &st_plain);
+  lv_obj_set_height(display_info, LV_SIZE_CONTENT);
+  lv_obj_set_flex_grow(display_info, 1);
+  set_flex(display_info, LV_FLEX_FLOW_COLUMN, 0, LV_FLEX_ALIGN_START);
+  make_label(display_info, "DISPLAY", font_tiny, col_label_dim);
+  setup_display_state = make_label(display_info, "--", font_small, col_text_strong);
+  make_label(display_info, "Flip to run the USB cable out the other side", font_tiny,
+             col_text_dim);
+
+  lv_obj_t *flip = make_box(display_card, &st_plain);
+  lv_obj_set_size(flip, 74, 32);
+  lv_obj_set_style_radius(flip, 4, 0);
+  lv_obj_set_style_bg_opa(flip, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(flip, 1, 0);
+  set_border_color(flip, 0x2B323B);
+  lv_obj_add_flag(flip, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(flip, flip_clicked, LV_EVENT_CLICKED, nullptr);
+  lv_obj_center(make_label(flip, "FLIP", font_tiny, 0xAAB4BD));
+
   make_label(page, "NETWORKS", font_tiny, col_label_dim);
 
   setup_scan_note = make_label(page, "Scanning...", font_tiny, col_range_dim);
@@ -1409,6 +1440,8 @@ void update_setup() {
     snprintf(text, sizeof(text), "apex.local " GLYPH_BULLET " no reply yet");
   }
   set_label(setup_apex_meta, text);
+
+  set_label(setup_display_state, state->display_flipped ? "Flipped 180" GLYPH_DEGREE : "Normal");
 
   update_networks(now);
 }

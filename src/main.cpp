@@ -6,6 +6,7 @@
 
 #include "apex.h"
 #include "model.h"
+#include "settings.h"
 #include "ui.h"
 #include "wifi_manager.h"
 
@@ -44,11 +45,43 @@ void set_backlight_percent(uint8_t percent) {
   ledcWrite(backlight_channel, duty);
 }
 
+// The panel's own MADCTL rotation is unreachable on this bus: the NV3041A init
+// sequence never writes 0x36, and Arduino_ESP32QSPI::write() hardcodes the
+// GRAM-write address, so the driver's setRotation() sends the MADCTL parameter
+// as a stray pixel instead of a register value. So the flip is done in the
+// flush below, where it costs a reverse of one small LVGL buffer.
+void apply_display_flip(bool flipped) { reef.display_flipped = flipped; }
+
+void set_display_flipped(bool flipped) {
+  apply_display_flip(flipped);
+  settings_save_display_flipped(flipped);
+  Serial.printf("Display orientation: %s (saved)\n", flipped ? "flipped 180" : "normal");
+  // The canvas holds the old frame in the old orientation; redraw all of it.
+  lv_obj_invalidate(lv_scr_act());
+}
+
 void display_flush(lv_disp_drv_t *display_driver, const lv_area_t *area, lv_color_t *color_data) {
   const int32_t width = area->x2 - area->x1 + 1;
   const int32_t height = area->y2 - area->y1 + 1;
+  uint16_t *pixels = reinterpret_cast<uint16_t *>(color_data);
+  int16_t x = area->x1;
+  int16_t y = area->y1;
 
-  display->draw16bitRGBBitmap(area->x1, area->y1, reinterpret_cast<uint16_t *>(color_data), width, height);
+  if (reef.display_flipped) {
+    // Turning a rectangular block 180 degrees is exactly reversing its pixels in
+    // memory order -- and the block itself lands at the mirrored position. LVGL
+    // is finished with this buffer once we return, so reversing it in place is
+    // safe, and it is at most a few thousand pixels of internal RAM.
+    for (int32_t head = 0, tail = width * height - 1; head < tail; ++head, --tail) {
+      const uint16_t swap = pixels[head];
+      pixels[head] = pixels[tail];
+      pixels[tail] = swap;
+    }
+    x = screen_width - 1 - area->x2;
+    y = screen_height - 1 - area->y2;
+  }
+
+  display->draw16bitRGBBitmap(x, y, pixels, width, height);
   if (lv_disp_flush_is_last(display_driver)) {
     display->flush();
   }
@@ -58,8 +91,16 @@ void display_flush(lv_disp_drv_t *display_driver, const lv_area_t *area, lv_colo
 void touch_read(lv_indev_drv_t *input_driver, lv_indev_data_t *data) {
   if (touch.read()) {
     const TP_Point point = touch.getPoint(0);
-    data->point.x = constrain(point.x, 0, screen_width - 1);
-    data->point.y = constrain(point.y, 0, screen_height - 1);
+    int16_t x = constrain(point.x, 0, screen_width - 1);
+    int16_t y = constrain(point.y, 0, screen_height - 1);
+    // The digitizer is glued to the glass and knows nothing about MADCTL, so a
+    // flipped panel needs its coordinates mirrored to match what is on screen.
+    if (reef.display_flipped) {
+      x = screen_width - 1 - x;
+      y = screen_height - 1 - y;
+    }
+    data->point.x = x;
+    data->point.y = y;
     data->state = LV_INDEV_STATE_PR;
     return;
   }
@@ -124,6 +165,9 @@ void setup() {
     return;
   }
 
+  settings_load(reef);
+  apply_display_flip(reef.display_flipped);
+
   lv_init();
   lv_disp_draw_buf_init(&draw_buffer, display_buffer, nullptr, screen_width * lvgl_buffer_rows);
 
@@ -141,7 +185,7 @@ void setup() {
   input_driver.read_cb = touch_read;
   lv_indev_drv_register(&input_driver);
 
-  const UiHooks hooks = {set_backlight_percent};
+  const UiHooks hooks = {set_backlight_percent, set_display_flipped};
   ui_create(&reef, hooks);
 
   // Paint the shell before the blocking Wi-Fi connect, so the panel comes up
@@ -149,7 +193,8 @@ void setup() {
   ui_update();
   lv_timer_handler();
 
-  Serial.println("Reef controller starting");
+  Serial.printf("Reef controller starting, display %s\n",
+                reef.display_flipped ? "flipped 180" : "normal");
   wifi_begin(reef);
 }
 

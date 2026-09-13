@@ -99,6 +99,10 @@ struct ReefState {
   JoinState join_state = JoinState::none;
   char join_ssid[33] = {};
   char join_password[max_password_len + 1] = {};
+
+  // Panel rotated 180 degrees, so the USB cable can leave the other side.
+  // Persisted in NVS; see settings.h.
+  bool display_flipped = false;
   uint32_t last_reply_ms = 0;   // millis() of the last successful poll
   bool ever_connected = false;  // true once we have seen one good poll
 

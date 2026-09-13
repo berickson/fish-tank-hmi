@@ -33,6 +33,31 @@ does not block at all. A typed passphrase is wiped from RAM as soon as the attem
 
 The Apex credentials stay in `secrets.h` — only Wi-Fi is configurable from the panel.
 
+## Display Orientation
+
+Setup's FLIP button rotates the panel 180° so the USB cable can leave the other side. The
+choice is saved to NVS (namespace `reefcfg`) and reapplied at boot.
+
+The rotation is done in software, in `display_flush()`. **The panel's own MADCTL rotation
+is unreachable on this bus** — worth knowing before trying to "optimise" this back into a
+register write:
+
+- The NV3041A init sequence never writes MADCTL (`0x36`) at all, so the panel runs at its
+  power-on scan direction.
+- `Arduino_ESP32QSPI::write(uint8_t)` hardcodes the transaction address to `0x003C00`, the
+  write-to-GRAM opcode. So `Arduino_NV3041A::setRotation()`, which does
+  `writeCommand(0x36); write(r);`, never delivers `r` as a register parameter — it goes out
+  as a stray pixel. Calling `setRotation()` on this bus flips nothing and dirties a pixel.
+
+Turning a rectangular block 180° is exactly reversing its pixels in memory order, and the
+block lands at the mirrored position — so the flush reverses the LVGL buffer in place and
+draws it at `(W-1-x2, H-1-y2)`. That buffer is at most 480×24 px of internal RAM, which is
+noise next to the full-frame blit to the panel that follows it.
+
+The GT911 digitizer is glued to the glass and knows nothing about any of this, so
+`touch_read()` mirrors both axes too. Forgetting that half is what makes a rotated display
+feel haunted.
+
 ## Screens
 
 The UI follows `design/V1/` (open `design/V1/Reef Controller.dc.html` in a browser for the
@@ -45,8 +70,9 @@ bar frame four pages:
   RETURN ALL TO AUTO.
 - **Alerts** — live problems (outlets out of auto, a dead Apex link) above an
   acknowledgeable history.
-- **Setup** — Wi-Fi and Apex link status, a scanned list of nearby networks, and RETRY /
-  RESCAN. Tapping a network opens the on-screen keyboard to join it.
+- **Setup** — Wi-Fi and Apex link status, a FLIP button that turns the panel 180°, a
+  scanned list of nearby networks, and RETRY / RESCAN. Tapping a network opens the
+  on-screen keyboard to join it.
 
 The power button in the status bar dims the panel to an idle screen; any touch wakes it.
 There is no auto-sleep.
@@ -116,6 +142,7 @@ and worth understanding before you flash it:
 | `src/model.h` / `.cpp` | `ReefState` — everything the UI draws |
 | `src/apex.h` / `.cpp` | Apex HTTP client: poll, outlet writes, feed cycles |
 | `src/wifi_manager.h` / `.cpp` | credentials (NVS + secrets fallback), connect, scan, join |
+| `src/settings.h` / `.cpp` | device settings kept in NVS (display orientation) |
 | `src/theme.h` / `.cpp` | palette and shared LVGL styles |
 | `src/ui.h` / `.cpp` | all screens; `ui_create()` builds, `ui_update()` repaints |
 | `src/logo_mark.c` | generated from `design/V1/robonerd-mark.svg` |
