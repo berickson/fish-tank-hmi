@@ -6,7 +6,6 @@
 // neither one reaches into the other.
 
 constexpr uint8_t max_outlets = 12;
-constexpr uint8_t spark_points = 16;
 constexpr uint8_t max_events = 8;
 constexpr uint8_t max_networks = 8;
 // WPA2 allows 63; the field and the keyboard both stop there.
@@ -23,27 +22,51 @@ struct Outlet {
   bool live;  // what the outlet is actually doing right now
 };
 
-// A fixed ring of recent samples, newest last, used for the Home sparklines.
+// The Home sparklines cover a fixed 24 hours, one column per horizontal pixel.
+// The card leaves 130 px for the chart (480 screen, 10 px page padding a side,
+// two 8 px gaps, then each card's own 1 px border and 8 px padding), and 128 is
+// the largest column count that divides the day exactly: 128 * 675 s = 86400.
+// An exact division matters because it is what lets a column be a fixed absolute
+// slice of time rather than a fraction that has to be re-derived.
+constexpr uint8_t trend_columns = 128;
+constexpr uint32_t trend_bucket_s = 675;
+// A column nothing has been recorded in. Readings are stored as hundredths, so
+// no real reading can collide with it.
+constexpr int16_t trend_empty = INT16_MIN;
+
+// 24 hours of one probe as a min/max band, a column per pixel. Values are
+// hundredths, which keeps a column to four bytes and matches what the sparkline
+// has to hand LVGL anyway.
+//
+// Columns are anchored to absolute epoch multiples of `trend_bucket_s`, never to
+// "now minus k columns". A closed column is therefore never recomputed: the
+// window slides left by whole columns and is otherwise the same picture. Binning
+// against a moving origin is what makes these charts wobble.
 struct Trend {
-  float points[spark_points];
-  uint8_t count;
+  int16_t lo[trend_columns];
+  int16_t hi[trend_columns];
+  // Absolute column index (epoch / trend_bucket_s) drawn at the right edge.
+  uint32_t newest;
 
-  void push(float value) {
-    if (count < spark_points) {
-      points[count++] = value;
-      return;
-    }
-    memmove(points, points + 1, sizeof(float) * (spark_points - 1));
-    points[spark_points - 1] = value;
-  }
+  Trend() { clear(); }
 
-  void range(float &low, float &high) const {
-    low = high = count ? points[0] : 0.0f;
-    for (uint8_t i = 1; i < count; ++i) {
-      low = min(low, points[i]);
-      high = max(high, points[i]);
-    }
-  }
+  void clear();
+
+  // Slide the window so `epoch` is the right edge, without recording anything.
+  // Used before a backfill so history fills in from the left instead of the
+  // chart scrolling a day's worth while it loads.
+  void anchor(uint32_t epoch);
+
+  // Fold one timestamped sample into its column. Samples older than the window
+  // are dropped -- the Apex datalog hands us those routinely -- and a newer one
+  // slides the window.
+  void add(uint32_t epoch, float value);
+
+  // Low and high across every recorded column. False when there is nothing yet.
+  bool range(float &low, float &high) const;
+
+ private:
+  void slide_to(uint32_t column);
 };
 
 struct Reading {
@@ -111,12 +134,25 @@ struct ReefState {
   int feed_remaining_s = 0;
   uint32_t feed_sampled_ms = 0;
 
-  // Apex wall clock, captured at the last poll, for timestamping events.
+  // Apex wall clock, captured at the last poll, for timestamping events and for
+  // placing readings in the 24-hour trends. It is a true Unix epoch; the Apex's
+  // configured UTC offset arrives alongside it and is what turns it into local
+  // time for display.
   uint32_t apex_epoch = 0;
   uint32_t apex_epoch_ms = 0;
+  int32_t tz_offset_s = 0;
 
   Event events[max_events];
   uint8_t event_count = 0;
+
+  // Apex clock advanced to right now, or 0 before the first poll has told us
+  // what time it is.
+  uint32_t now_epoch() const {
+    if (apex_epoch == 0) {
+      return 0;
+    }
+    return apex_epoch + (millis() - apex_epoch_ms) / 1000;
+  }
 
   int live_feed_seconds() const {
     if (feed_remaining_s <= 0) {

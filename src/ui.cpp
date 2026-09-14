@@ -66,9 +66,8 @@ lv_obj_t *banner_label;
 
 struct CardUi {
   lv_obj_t *value;
-  lv_obj_t *chart;
+  lv_obj_t *spark;
   lv_obj_t *range;
-  lv_chart_series_t *series;
 };
 CardUi cards[3];
 
@@ -787,6 +786,106 @@ lv_obj_t *build_page() {
   return page;
 }
 
+// The sparklines are drawn by hand rather than with lv_chart, which has no way
+// to draw a floating min/max bar: LV_CHART_TYPE_BAR grows from the baseline and
+// there is no band type. Each column of the Trend becomes one pixel-wide bar
+// spanning that slice of the day's low to its high, and the live reading gets a
+// dot on the newest column.
+constexpr lv_coord_t spark_dot_size = 3;
+
+void spark_draw(lv_event_t *event) {
+  lv_obj_t *obj = lv_event_get_target(event);
+  const Reading *reading = static_cast<const Reading *>(lv_obj_get_user_data(obj));
+  if (reading == nullptr) {
+    return;
+  }
+
+  float low = 0.0f;
+  float high = 0.0f;
+  if (!reading->trend.range(low, high)) {
+    return;  // nothing recorded yet
+  }
+  // A dead-flat day would divide by zero and, worse, draw a line along one edge.
+  if (high - low < 0.01f) {
+    const float mid = (high + low) / 2.0f;
+    low = mid - 0.05f;
+    high = mid + 0.05f;
+  }
+
+  lv_area_t area;
+  lv_obj_get_coords(obj, &area);
+  const lv_coord_t width = lv_area_get_width(&area);
+  const lv_coord_t height = lv_area_get_height(&area);
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+
+  // Right-aligned, so the newest column sits against the right edge and any
+  // slack between the chart width and the column count falls off the left.
+  const lv_coord_t right = area.x2;
+  const float span = high - low;
+  const auto y_for = [&](float value) {
+    const float fraction = (value - low) / span;
+    const lv_coord_t offset = static_cast<lv_coord_t>(fraction * (height - 1) + 0.5f);
+    return static_cast<lv_coord_t>(area.y2 - offset);
+  };
+
+  lv_draw_ctx_t *draw_ctx = lv_event_get_draw_ctx(event);
+
+  lv_draw_rect_dsc_t bar_dsc;
+  lv_draw_rect_dsc_init(&bar_dsc);
+  bar_dsc.bg_color = lv_color_hex(col_accent);
+  bar_dsc.bg_opa = LV_OPA_COVER;
+
+  // If the chart is narrower than the window, the oldest columns fall off the
+  // left rather than the whole thing refusing to draw.
+  const uint8_t first = width < trend_columns ? trend_columns - static_cast<uint8_t>(width) : 0;
+
+  const Trend &trend = reading->trend;
+  for (uint8_t i = first; i < trend_columns; ++i) {
+    if (trend.lo[i] == trend_empty) {
+      continue;
+    }
+    const lv_coord_t x = right - (trend_columns - 1 - i);
+
+    lv_area_t bar;
+    bar.x1 = x;
+    bar.x2 = x;
+    bar.y1 = y_for(trend.hi[i] / 100.0f);
+    bar.y2 = y_for(trend.lo[i] / 100.0f);
+    lv_draw_rect(draw_ctx, &bar_dsc, &bar);
+  }
+
+  // A single logged value per column has no spread to draw, so most of a fresh
+  // backfill is one pixel tall. Live columns fill out as the panel watches them.
+  if (!reading->valid) {
+    return;
+  }
+
+  lv_draw_rect_dsc_t dot_dsc;
+  lv_draw_rect_dsc_init(&dot_dsc);
+  dot_dsc.bg_color = lv_color_hex(col_text);
+  dot_dsc.bg_opa = LV_OPA_COVER;
+  dot_dsc.radius = LV_RADIUS_CIRCLE;
+
+  const lv_coord_t centre = y_for(constrain(reading->value, low, high));
+  lv_area_t dot;
+  dot.x2 = right;
+  dot.x1 = right - (spark_dot_size - 1);
+  dot.y1 = centre - spark_dot_size / 2;
+  dot.y2 = dot.y1 + spark_dot_size - 1;
+  // Keep the whole dot inside the chart so it never clips to a half-moon.
+  if (dot.y1 < area.y1) {
+    dot.y2 += area.y1 - dot.y1;
+    dot.y1 = area.y1;
+  }
+  if (dot.y2 > area.y2) {
+    dot.y1 -= dot.y2 - area.y2;
+    dot.y2 = area.y2;
+  }
+  lv_draw_rect(draw_ctx, &dot_dsc, &dot);
+}
+
 void build_home() {
   lv_obj_t *page = build_page();
   pages[tab_home] = page;
@@ -821,6 +920,7 @@ void build_home() {
 
   static const char *card_labels[3] = {"TEMP", "PH", "SALINITY"};
   static const char *card_units[3] = {GLYPH_DEGREE "F", "", "PPT"};
+  const Reading *card_readings[3] = {&state->temperature, &state->ph, &state->salinity};
   for (uint8_t i = 0; i < 3; ++i) {
     lv_obj_t *card = make_box(card_row, &st_panel);
     lv_obj_set_height(card, LV_PCT(100));
@@ -836,19 +936,13 @@ void build_home() {
     cards[i].value = make_label(value_row, "--", font_num_big, col_text);
     make_label(value_row, card_units[i], font_tiny, 0x6B757F);
 
-    lv_obj_t *chart = lv_chart_create(card);
-    lv_obj_set_size(chart, LV_PCT(100), 16);
-    lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(chart, 0, 0);
-    lv_obj_set_style_pad_all(chart, 0, 0);
-    lv_obj_set_style_size(chart, 0, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
-    lv_obj_clear_flag(chart, LV_OBJ_FLAG_SCROLLABLE);
-    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
-    lv_chart_set_point_count(chart, spark_points);
-    lv_chart_set_div_line_count(chart, 0, 0);
-    cards[i].chart = chart;
-    cards[i].series = lv_chart_add_series(chart, lv_color_hex(col_accent), LV_CHART_AXIS_PRIMARY_Y);
+    lv_obj_t *spark = make_box(card, &st_plain);
+    lv_obj_set_size(spark, LV_PCT(100), 16);
+    lv_obj_set_style_bg_opa(spark, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(spark, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_user_data(spark, const_cast<Reading *>(card_readings[i]));
+    lv_obj_add_event_cb(spark, spark_draw, LV_EVENT_DRAW_MAIN, nullptr);
+    cards[i].spark = spark;
 
     cards[i].range = make_label(card, "", font_tiny, col_range_dim);
   }
@@ -1224,44 +1318,25 @@ void update_card(CardUi &card, const Reading &reading, uint8_t decimals, bool re
   // readable while the Apex is unreachable.
   set_text_color(card.value, state->apex_up ? col_text : col_text_dim);
 
-  const Trend &trend = reading.trend;
-  if (trend.count < 2) {
-    show(card.chart, false);
+  float low = 0.0f;
+  float high = 0.0f;
+  if (!reading.trend.range(low, high)) {
+    show(card.spark, false);
     set_label(card.range, "");
     return;
   }
 
-  show(card.chart, true);
-  float low = 0.0f;
-  float high = 0.0f;
-  trend.range(low, high);
+  show(card.spark, true);
 
   char range_text[24];
   snprintf(range_text, sizeof(range_text), "%.*f - %.*f", decimals, low, decimals, high);
   set_label(card.range, range_text);
 
-  // Writing chart points invalidates the chart, and there is nothing new to draw
-  // between polls, so only do it when the sample ring actually moved.
-  if (!redraw_trend) {
-    return;
-  }
-
-  // lv_coord_t is 16-bit here, so readings are carried as hundredths.
-  lv_coord_t low_scaled = static_cast<lv_coord_t>(low * 100.0f);
-  lv_coord_t high_scaled = static_cast<lv_coord_t>(high * 100.0f);
-  if (high_scaled <= low_scaled) {
-    low_scaled -= 1;
-    high_scaled += 1;
-  }
-  lv_chart_set_range(card.chart, LV_CHART_AXIS_PRIMARY_Y, low_scaled, high_scaled);
-
-  // Right-align the samples so a part-full trend grows in from the right.
-  const uint8_t blank = spark_points - trend.count;
-  for (uint8_t i = 0; i < spark_points; ++i) {
-    const lv_coord_t value =
-        i < blank ? LV_CHART_POINT_NONE
-                  : static_cast<lv_coord_t>(trend.points[i - blank] * 100.0f);
-    lv_chart_set_value_by_id(card.chart, card.series, i, value);
+  // The sparkline reads the Trend directly when it draws, so all this has to do
+  // is say when the picture changed. Redrawing it costs a full-frame flush, so
+  // it is gated on the revision rather than done every loop.
+  if (redraw_trend) {
+    lv_obj_invalidate(card.spark);
   }
 }
 

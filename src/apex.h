@@ -1,5 +1,7 @@
 #pragma once
 
+#include <HTTPClient.h>
+
 #include "model.h"
 
 // Talks to the Neptune Apex on the local network. No cloud, no Fusion account.
@@ -17,3 +19,8 @@ bool apex_set_feed_cycle(uint8_t cycle_index, bool active);
 
 // Forget the cached apex.local address so the next call re-resolves it.
 void apex_forget_address();
+
+// Point `http` at a path on the Apex with credentials and timeouts already set,
+// resolving apex.local if that has not happened yet. False if there is no way to
+// reach it right now. Shared with the datalog fetch in history.cpp.
+bool apex_begin_request(HTTPClient &http, const String &path);

@@ -5,6 +5,7 @@
 #include <lvgl.h>
 
 #include "apex.h"
+#include "history.h"
 #include "model.h"
 #include "settings.h"
 #include "ui.h"
@@ -15,6 +16,10 @@ constexpr uint32_t apex_poll_interval_ms = 10000;
 // Asleep the panel shows nothing, so back the polling right off.
 constexpr uint32_t apex_sleep_poll_interval_ms = 60000;
 constexpr uint32_t health_report_interval_ms = 30000;
+// The Apex logs every 10 minutes, so asking more often than that only re-reads
+// what we already have. It is a few KB and exists to heal gaps, not to refresh:
+// live polling fills the same columns with a real min and max.
+constexpr uint32_t history_topup_interval_ms = 10UL * 60 * 1000;
 constexpr uint8_t backlight_pin = 1;
 constexpr uint8_t backlight_channel = 0;
 constexpr uint32_t backlight_freq_hz = 5000;
@@ -137,6 +142,8 @@ void record_link_transition(bool now_up) {
   if (now_up != was_up) {
     if (now_up) {
       reef.add_event(EventKind::info, "Apex link restored", "Controller replying again");
+      // However long the link was down for, the Apex logged through it.
+      history_request_backfill();
     } else {
       reef.add_event(EventKind::danger, "Apex link lost", "No reply from controller");
     }
@@ -202,7 +209,9 @@ void loop() {
   static uint32_t last_tick = 0;
   static uint32_t last_apex_poll = 0;
   static uint32_t last_health_report = 0;
+  static uint32_t last_history_topup = 0;
   static bool first_poll_done = false;
+  static bool history_seeded = false;
 
   const uint32_t now = millis();
   lv_tick_inc(now - last_tick);
@@ -222,7 +231,24 @@ void loop() {
       reef.apex_up = false;
     }
     record_link_transition(ok);
+
+    // The first poll is what tells us the time, so it is also the earliest the
+    // datalog can be asked for anything.
+    if (ok && !history_seeded) {
+      history_seeded = true;
+      last_history_topup = now;
+      history_request_backfill();
+    }
   }
+
+  if (history_seeded && !history_busy() && now - last_history_topup >= history_topup_interval_ms) {
+    last_history_topup = now;
+    history_request_topup();
+  }
+
+  // Reads one slice of any datalog fetch in flight, bounded so the panel keeps
+  // painting and responding to touch while a day of history streams in.
+  history_pump(reef);
 
   ui_update();
 
@@ -231,5 +257,10 @@ void loop() {
     report_health();
   }
 
-  delay(5);
+  // The idle delay is there to stop the loop spinning for nothing. While a day
+  // of history is streaming in there is something to do, and the pump has its
+  // own budget, so skip it.
+  if (!history_busy()) {
+    delay(5);
+  }
 }

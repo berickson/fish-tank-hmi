@@ -31,18 +31,6 @@ bool ensure_apex_ip() {
   return true;
 }
 
-bool begin_request(HTTPClient &http, const String &path) {
-  if (WiFi.status() != WL_CONNECTED || !ensure_apex_ip()) {
-    return false;
-  }
-
-  http.begin(String("http://") + apex_ip.toString() + path);
-  http.setAuthorization(apex_username, apex_password);
-  http.setConnectTimeout(http_timeout_ms);
-  http.setTimeout(http_timeout_ms);
-  return true;
-}
-
 OutletMode mode_from_status(const char *status) {
   if (status == nullptr) {
     return OutletMode::automatic;
@@ -78,21 +66,33 @@ const char *mode_keyword(OutletMode mode) {
   }
 }
 
-void store_reading(Reading &reading, float value) {
+void store_reading(Reading &reading, float value, uint32_t epoch) {
   reading.value = value;
   reading.valid = true;
-  reading.trend.push(value);
+  reading.trend.add(epoch, value);
 }
 
 }  // namespace
 
 void apex_forget_address() { apex_ip = INADDR_NONE; }
 
+bool apex_begin_request(HTTPClient &http, const String &path) {
+  if (WiFi.status() != WL_CONNECTED || !ensure_apex_ip()) {
+    return false;
+  }
+
+  http.begin(String("http://") + apex_ip.toString() + path);
+  http.setAuthorization(apex_username, apex_password);
+  http.setConnectTimeout(http_timeout_ms);
+  http.setTimeout(http_timeout_ms);
+  return true;
+}
+
 bool apex_poll(ReefState &state) {
   state.wifi_up = WiFi.status() == WL_CONNECTED;
 
   HTTPClient http;
-  if (!begin_request(http, "/cgi-bin/status.json")) {
+  if (!apex_begin_request(http, "/cgi-bin/status.json")) {
     return false;
   }
 
@@ -122,6 +122,10 @@ bool apex_poll(ReefState &state) {
 
   state.apex_epoch = istat["date"].as<uint32_t>();
   state.apex_epoch_ms = millis();
+  // Hours east of UTC, as a decimal ("-7.00"), so half-hour zones survive it.
+  if (!istat["timezone"].isNull()) {
+    state.tz_offset_s = lroundf(istat["timezone"].as<float>() * 3600.0f);
+  }
 
   state.feed_remaining_s = istat["feed"]["active"].as<int>();
   state.feed_sampled_ms = millis();
@@ -132,11 +136,11 @@ bool apex_poll(ReefState &state) {
       continue;
     }
     if (strcmp(name, "Tmp") == 0) {
-      store_reading(state.temperature, probe["value"].as<float>());
+      store_reading(state.temperature, probe["value"].as<float>(), state.apex_epoch);
     } else if (strcmp(name, "pH") == 0) {
-      store_reading(state.ph, probe["value"].as<float>());
+      store_reading(state.ph, probe["value"].as<float>(), state.apex_epoch);
     } else if (strcmp(name, "Salt") == 0) {
-      store_reading(state.salinity, probe["value"].as<float>());
+      store_reading(state.salinity, probe["value"].as<float>(), state.apex_epoch);
     }
   }
 
@@ -170,7 +174,7 @@ bool apex_poll(ReefState &state) {
 
 bool apex_set_outlet(const char *did, OutletMode mode) {
   HTTPClient http;
-  if (!begin_request(http, String("/rest/status/outputs/") + did)) {
+  if (!apex_begin_request(http, String("/rest/status/outputs/") + did)) {
     return false;
   }
 
@@ -205,7 +209,7 @@ bool apex_set_feed_cycle(uint8_t cycle_index, bool active) {
   HTTPClient http;
   // The cycle index must be in the URL path (matches the Apex app's own request);
   // a body-only "name" field is silently accepted but never actually starts the cycle.
-  if (!begin_request(http, String("/rest/status/feed/") + cycle_index)) {
+  if (!apex_begin_request(http, String("/rest/status/feed/") + cycle_index)) {
     return false;
   }
 

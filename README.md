@@ -64,8 +64,8 @@ The UI follows `design/V1/` (open `design/V1/Reef Controller.dc.html` in a brows
 interactive mock, and see `LVGL-HANDOFF.md` for the spec). A persistent status bar and tab
 bar frame four pages:
 
-- **Home** — Temp / pH / Salinity cards with live sparklines and min-max, a warning banner
-  when anything is out of auto, and the FEED button with its countdown.
+- **Home** — Temp / pH / Salinity cards with 24-hour sparklines and min-max, a warning
+  banner when anything is out of auto, and the FEED button with its countdown.
 - **Control** — one row per Apex outlet with an OFF / AUTO / ON selector, plus
   RETURN ALL TO AUTO.
 - **Alerts** — live problems (outlets out of auto, a dead Apex link) above an
@@ -88,7 +88,10 @@ Read from `istat`:
 - `inputs` — the `Tmp`, `pH` and `Salt` probes feed the three Home cards.
 - `outputs` where `type == "outlet"` — the Control rows.
 - `feed.active` — seconds left in the running feed cycle.
-- `date` — used to timestamp alert history.
+- `date` — a true Unix epoch, used to timestamp alert history and to place readings in
+  the 24-hour trends.
+- `timezone` — hours east of UTC as a decimal. `date` is *not* pre-shifted into local
+  time, so this is what turns it into a wall clock.
 
 Outlet state is carried in `status[0]`: `AON` / `AOF` mean the outlet's own Apex program is
 driving it on or off, while a bare `ON` / `OFF` is a manual override the Apex holds until
@@ -99,6 +102,58 @@ Writes are `PUT /rest/status/outputs/<did>` with
 `{"did":"<did>","status":["<MODE>","","OK",""],"to":"<MODE>"}` where `<MODE>` is
 `OFF`, `AUTO` or `ON`. The Apex answers `200` even when it rejects a request, so the
 response's `errorCode` is what actually gets checked.
+
+## The 24-Hour Sparklines
+
+Each Home card shows a fixed 24 hours as a min/max band: one pixel-wide column per slice
+of the day, spanning that slice's low to its high, with a dot on the newest column at the
+current reading. There is no time axis and no "24H" label — the window never changes.
+
+**Columns are anchored to absolute epoch multiples of the column width**, never to "now
+minus k columns". A closed column is therefore never recomputed: as time passes the window
+slides left by whole columns and is otherwise the same picture. Re-binning against a moving
+origin is what makes these charts wobble, and it is the one thing to preserve if any of
+this is ever rewritten.
+
+The chart is 130 px wide — 480 screen, 10 px of page padding a side, two 8 px gaps between
+cards, then each card's 1 px border and 8 px padding. 128 is the largest column count that
+divides a day exactly (128 × 675 s = 86400), so a column is a whole number of seconds and
+the geometry needs no rounding anywhere.
+
+`lv_chart` cannot draw this: `LV_CHART_TYPE_BAR` grows from the baseline and there is no
+band type, so `spark_draw()` in `ui.cpp` renders the columns itself from a
+`LV_EVENT_DRAW_MAIN` handler. The columns that fit are drawn and any excess falls off the
+left, rather than the chart refusing to draw at all if the geometry shifts by a pixel.
+
+### Backfill from the Apex datalog
+
+A freshly booted panel would otherwise take a day to draw a day, so it fills the window
+from the Apex's own log: `GET /cgi-bin/datalog.json?sdate=YYMMDDHHMM`, which returns
+everything from that timestamp to now. Beware the units — `sdate` is Apex *local* time
+while the record timestamps inside are true Unix epochs. There is no `edate` or `hours`
+parameter; `days` only caps the span. The request runs at boot, on every reconnect, and as
+a half-hour top-up every 10 minutes to heal gaps.
+
+Two things make this awkward. A full day is **~725 KB** — the Apex logs 21 channels every
+10 minutes, repeats timestamps, and supports neither gzip nor any field filter (all of
+`did`, `type`, `name`, `inputs` and `probes` are accepted and ignored). And it has to
+arrive without the panel freezing.
+
+So `history.cpp` scans the response as a byte stream rather than parsing it: it tracks the
+latest `"date"`, the latest `"name"`, and applies each `"value"` that follows a probe we
+care about. Everything else streams past unread, nothing is buffered, and the scan is
+resumable at any byte. `history_pump()` drains the socket for 20 ms per `loop()` pass and
+returns, so the panel keeps painting and responding to touch throughout. Measured on this
+board: 725 KB in 5-12 s depending on how fast the Apex feels like reading its SD card,
+against a worst loop pass of ~114 ms versus a ~65 ms idle baseline.
+
+The 20 ms budget matters more than it looks. At 4 ms the socket was drained more slowly
+than the Apex filled it, the TCP window closed, and the same transfer took 40 s.
+
+Because the Apex logs only once per 10 minutes, a backfilled column has a single value and
+draws one pixel tall. Live polling gives a column a real low and high, so the chart fills
+out into proper bars over the first day of uptime. Merging is always safe: a top-up folded
+into a column the panel already watched can only confirm a value already inside the band.
 
 Feed cycles are `PUT /rest/status/feed/<index>`. The cycle index has to be in the URL
 path — a body-only `name` field is accepted and then silently ignored.
@@ -205,6 +260,7 @@ conversion the folder is named after (see `src/logo_mark.c`).
 | `src/main.cpp` | board bring-up, LVGL init, poll scheduling |
 | `src/model.h` / `.cpp` | `ReefState` — everything the UI draws |
 | `src/apex.h` / `.cpp` | Apex HTTP client: poll, outlet writes, feed cycles |
+| `src/history.h` / `.cpp` | streaming datalog backfill for the 24-hour sparklines |
 | `src/wifi_manager.h` / `.cpp` | credentials (NVS + secrets fallback), connect, scan, join |
 | `src/settings.h` / `.cpp` | device settings kept in NVS (display orientation) |
 | `src/theme.h` / `.cpp` | palette and shared LVGL styles |
