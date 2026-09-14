@@ -4,3 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 secrets/secrets.h
+
+# Vendor SDK for the display board -- datasheets, demos, and Windows tools.
+# Downloaded from the manufacturer, not ours to version.
+docs/JC4827W543/

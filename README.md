@@ -130,9 +130,73 @@ and worth understanding before you flash it:
 - Touch uses TouchLib with `TOUCH_MODULES_GT911`.
 - Backlight is on LEDC channel 0; sleep dims it to 3% rather than 0, because a truly dark
   panel reads as broken rather than asleep.
+- Audio (unused so far): an **NS4168** I2S mono class-D amp, 2.5 W — identified from the
+  chip markings under a microscope, not just the schematic. The vendor also ships an
+  AX98357A datasheet; that part is not on this board. Driven by BCLK GPIO 42, LRCLK GPIO 2,
+  DIN GPIO 41 (from the schematic, not yet exercised in code). Its CTRL pin is tied high
+  through 1 MΩ, so the amp is always enabled — there is no GPIO mute, and silence has to be
+  fed as samples.
+- **Two identical JST 1.25 2-pin connectors sit on this board and are easy to confuse.**
+  `P7` is the speaker output; `P6` is `BAT+`/`BAT−` on the lithium charging circuit. A
+  speaker on the battery header, or a cell on the amp output, damages something. Identify
+  them by their neighbours: the speaker header sits beside the two small output-filter
+  inductors `L4`/`L5`; the battery header sits by the charge controller, its larger inductor
+  `L2`, and the side button.
 - The board default partition table splits 4 MB into two 1.25 MB OTA slots, and the LVGL
   fonts alone push the image past 97% of one. `platformio.ini` selects `huge_app.csv`
   instead: a single 3 MB app partition, no OTA. Flashing is over USB.
+
+## Vendor Documentation
+
+The hardware facts above come from Guition's SDK bundle for this board:
+
+```
+https://pan.jczn1688.com/directlink/1/HMI%20display/JC4827W543.zip
+```
+
+Unpack it to `docs/JC4827W543/`, which is gitignored — it comes to ~290 MB of datasheets,
+Windows binaries and `.rar` archives, none of it ours to version. Nothing in the build
+depends on it; it is reference material for when the hardware misbehaves.
+
+What is actually worth opening:
+
+- **`5-IO pin distribution/`** — misnamed, and the most valuable folder in the bundle. The
+  two PNGs are not pin tables but the board's full **schematics**: power, USB-C, SD slot,
+  lithium charging, the LCD and touch connectors, and the audio amp. The `.xlsx` beside them
+  is worthless — a bare ESP32-S3-WROOM-1 pin-number map with no peripheral assignments.
+
+  Read the schematics with one caveat: sheet 2's title block says `ESP32-4827A043 v0.2`, not
+  our part, and it carries an XPT2046 resistive-touch block and a 16-bit parallel LCD
+  interface we do not have. It is a shared multi-variant sheet with unpopulated sections. It
+  is still right for this board where it counts — the capacitive-touch FPC block shows
+  `IO4` SCL / `IO8` SDA / `IO38` reset, and backlight on `IO1`, all matching Hardware Notes.
+  Treat anything on it we have not confirmed in silicon as likely-but-unverified.
+- **`2-Specification/`** and **`6-User_Manual/`** — English PDFs, panel timings and
+  mechanical dimensions.
+- **`4-Driver_IC_Data_Sheet/`** — ESP32-S3 and WROOM-1 datasheets, plus `Nsiway-NS4168.pdf`
+  for the audio amp actually fitted. Ignore `AX98357AETE T_2021-01-06.PDF`: it is a renamed
+  Maxim MAX98357A datasheet for a part this board does not use.
+- **`1-Demo/Demo_Arduino/`** — a vendor fork of Arduino_GFX 1.4.4 carrying the NV3041A
+  driver. `3_3-2-TFT-LVGL-Benchmark/LvglBenchmark/LvglBenchmark.ino:69` constructs the panel
+  the same way `src/main.cpp` does; the Wi-Fi and BLE sketches are stock ESP32 examples.
+- **`8-Burn operation/`** — factory-image `.bin` files and Espressif's Windows flash tool.
+  The bins are the only thing here you cannot regenerate: they restore the board to its
+  shipped demo firmware.
+
+`latest initialization_4031A-01配IPS.docx` (duplicated inside `4-Driver_IC_Data_Sheet/`) is
+worth a note, because the filename translates badly. 配 means "paired with", so it reads
+"4031A-01, for the IPS panel" — 4031A-01 being the NV3041A. Inside is no prose at all: 96
+`Write_Comm`/`Write_Data` pairs, the panel maker's own power-on register sequence. It is the
+authority for the MADCTL claim in Display Orientation above — the sequence never writes
+`0x36`, and neither does the bundled Arduino_GFX, so the panel really does run at its
+power-on scan direction by design.
+
+Skip **`7-Character&Picture_Molding_Tool/`** entirely. The name is a machine translation of
+字符和图片取模工具; 取模 is bitmap extraction, not "molding". Despite that, the folder holds no
+extraction tool — just five Windows archives repackaged from Chinese freeware portals, some
+with binaries dated 2006. On Linux the CH340 driver is in-kernel, `pio device monitor`
+replaces their serial terminal, and LVGL's `lv_font_conv` / `LVGLImage.py` do the bitmap
+conversion the folder is named after (see `src/logo_mark.c`).
 
 ## Source Layout
 
