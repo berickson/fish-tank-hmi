@@ -232,12 +232,12 @@ and worth understanding before you flash it:
 - Touch uses TouchLib with `TOUCH_MODULES_GT911`.
 - Backlight is on LEDC channel 0; sleep dims it to 3% rather than 0, because a truly dark
   panel reads as broken rather than asleep.
-- Audio (unused so far): an **NS4168** I2S mono class-D amp, 2.5 W — identified from the
-  chip markings under a microscope, not just the schematic. The vendor also ships an
-  AX98357A datasheet; that part is not on this board. Driven by BCLK GPIO 42, LRCLK GPIO 2,
-  DIN GPIO 41 (from the schematic, not yet exercised in code). Its CTRL pin is tied high
-  through 1 MΩ, so the amp is always enabled — there is no GPIO mute, and silence has to be
-  fed as samples.
+- Audio: an **NS4168** I2S mono class-D amp, 2.5 W — identified from the chip markings
+  under a microscope, not just the schematic. The vendor also ships an AX98357A datasheet;
+  that part is not on this board. Driven by BCLK GPIO 42, LRCLK GPIO 2, DIN GPIO 41. Its
+  CTRL pin is tied high through 1 MΩ, so the amp is always enabled — there is no GPIO mute,
+  and silence has to be fed as samples. The panel firmware makes no sound; see **Speaker**
+  below for what has been proven to work.
 - **Two identical JST 1.25 2-pin connectors sit on this board and are easy to confuse.**
   `P7` is the speaker output; `P6` is `BAT+`/`BAT−` on the lithium charging circuit. A
   speaker on the battery header, or a cell on the amp output, damages something. Identify
@@ -247,6 +247,40 @@ and worth understanding before you flash it:
 - The board default partition table splits 4 MB into two 1.25 MB OTA slots, and the LVGL
   fonts alone push the image past 97% of one. `platformio.ini` selects `huge_app.csv`
   instead: a single 3 MB app partition, no OTA. Flashing is over USB.
+
+## Speaker
+
+Nothing in the panel firmware makes sound. The hardware is proven, though, so if a feature
+ever wants it the bring-up is already done — this is a note to pick up from, not a feature.
+
+```sh
+$PIO run --target upload --environment audio_test --upload-port /dev/ttyACM0
+$PIO device monitor --environment audio_test --port /dev/ttyACM0
+```
+
+Tones, a sweep and a compiled-in speech clip, with the display, Wi-Fi and Apex code left
+out of the image. Keys `1`-`5` pick an item, `+`/`-` change volume. **Flashing it replaces
+the panel firmware**; reflash `display_4_3_capacitive` to get the panel back.
+
+Tested against a Treedix 1 W 8 Ω mini speaker on `P7`. What was worth learning:
+
+- 16-bit stereo I2S frames at 16 kHz, each mono sample written to both channels so it does
+  not matter which one the amp sums or picks.
+- **Loudness is mostly a software problem here.** Straight peak-normalised espeak output at
+  a safe-looking volume lands near −30 dBFS, roughly 0.1% of the amp's power, and sounds
+  broken. Two fixes stack to about +14 dB: drive the amp harder (0.8 rather than 0.3), and
+  raise the clip's *average* level rather than its peak.
+- Ordinary compression does not raise that average — espeak's plosives are faster than any
+  usable attack time, so the peak survives and normalising afterwards undoes the work.
+  `tools/make_speech_clip.py` uses a 2 ms look-ahead limiter instead, which is what lets the
+  clip be driven 16 dB into a −1 dBFS ceiling. It also high-passes at 200 Hz and adds 4 dB
+  at 3 kHz; the cone has no low end, and spending headroom there only muddies the voice.
+- Judge loudness by RMS over the speech-active frames. Whole-file RMS counts the pauses and
+  reads several dB pessimistic.
+- A bare driver cancels itself front-to-back below roughly 8 kHz, so **it needs an enclosure
+  before it is worth judging.** Sealed, 15–25 cm³, with the driver close to the panel and a
+  vent area at least the size of the cone. In a reef room, print it in PETG and cover the
+  outlet with waterproof speaker mesh.
 
 ## Vendor Documentation
 
@@ -313,6 +347,7 @@ conversion the folder is named after (see `src/logo_mark.c`).
 | `src/theme.h` / `.cpp` | palette and shared LVGL styles |
 | `src/ui.h` / `.cpp` | all screens; `ui_create()` builds, `ui_update()` repaints |
 | `src/logo_mark.c` | generated from `design/V1/robonerd-mark.svg` |
+| `src/audio_test/` | speaker bring-up sketch, not part of the panel firmware |
 
 `ui_update()` runs every loop, so every setter in it is a no-op when nothing changed —
 this panel can only flush whole 480x272 frames, so a stray style write costs a full
