@@ -114,6 +114,9 @@ struct ReefState {
 
   bool wifi_up = false;
   bool apex_up = false;
+  // Set by the RETRY button, cleared by loop() when it acts on it: poll now
+  // rather than waiting out whatever backoff the retries have stretched to.
+  bool apex_retry_requested = false;
 
   Network networks[max_networks];
   uint8_t network_count = 0;
@@ -133,6 +136,18 @@ struct ReefState {
   // that was, so the countdown can tick locally between polls.
   int feed_remaining_s = 0;
   uint32_t feed_sampled_ms = 0;
+
+  // When a feed cycle was last seen starting, so the panel can answer "have I
+  // already fed them today". Persisted in NVS; see settings.h.
+  //
+  // A cycle runs for minutes and the Apex is polled every few seconds, so any
+  // feed is caught whatever started it -- this panel, the Apex display or the
+  // phone app. What cannot be caught is one that happened while the panel was
+  // unpowered, so `feed_confirmed` records whether this boot saw the feed
+  // itself. When it did not, the stored time is the newest feed we know of and
+  // there may have been a later one in the dark.
+  uint32_t last_feed_epoch = 0;
+  bool feed_confirmed = false;
 
   // Apex wall clock, captured at the last poll, for timestamping events and for
   // placing readings in the 24-hour trends. It is a true Unix epoch; the Apex's
@@ -163,6 +178,16 @@ struct ReefState {
   }
 
   bool feeding() const { return live_feed_seconds() > 0; }
+
+  // Seconds since the last known feed, or -1 if none has ever been recorded or
+  // the Apex clock has not arrived yet to measure against.
+  int32_t since_last_feed_s() const {
+    const uint32_t now = now_epoch();
+    if (last_feed_epoch == 0 || now == 0 || now < last_feed_epoch) {
+      return -1;
+    }
+    return static_cast<int32_t>(now - last_feed_epoch);
+  }
 
   uint8_t override_count() const {
     uint8_t count = 0;

@@ -6,29 +6,114 @@
 #include <WiFi.h>
 
 #include "secrets.h"
+#include "settings.h"
+#include "wifi_manager.h"
 
 namespace {
 
 constexpr char apex_mdns_name[] = "apex";
 // HTTP runs on the UI thread, so a dead Apex must fail fast or the panel freezes.
 constexpr uint16_t http_timeout_ms = 2000;
+// So does the mDNS query, and it blocks for its whole timeout when nothing
+// answers. The library's own default is 2000 ms, which is a visible stutter on
+// every poll while the Apex is away; a responder on the same LAN answers in
+// milliseconds or not at all.
+constexpr uint32_t mdns_query_timeout_ms = 600;
+// Unreachable this long means the responder may be wedged or bound to an
+// interface that no longer exists, which only a restart clears. This mirrors the
+// radio restart in wifi_manager.cpp, one layer up. Polling never stops either
+// way -- this only changes what each attempt is willing to try.
+constexpr uint32_t mdns_restart_after_ms = 5UL * 60 * 1000;
 
 IPAddress apex_ip;
+// The address the Apex last actually answered on, remembered across boots. The
+// controller sits on one address for months at a time, so this is the cheapest
+// and most reliable way back to it when mDNS cannot answer.
+IPAddress last_good_ip;
+bool last_good_loaded = false;
+
+uint32_t unreachable_since_ms = 0;
+uint32_t last_mdns_restart_ms = 0;
+
+void load_last_good() {
+  if (last_good_loaded) {
+    return;
+  }
+  last_good_loaded = true;
+  const uint32_t stored = settings_load_apex_ip();
+  if (stored != 0) {
+    last_good_ip = IPAddress(stored);
+    Serial.printf("Last known Apex address: %s\n", last_good_ip.toString().c_str());
+  }
+}
 
 bool ensure_apex_ip() {
   if (apex_ip != INADDR_NONE) {
     return true;
   }
 
-  const IPAddress resolved = MDNS.queryHost(apex_mdns_name);
-  if (resolved == INADDR_NONE) {
-    Serial.println("mDNS lookup for apex.local failed");
-    return false;
+  load_last_good();
+
+  const IPAddress resolved = MDNS.queryHost(apex_mdns_name, mdns_query_timeout_ms);
+  if (resolved != INADDR_NONE) {
+    apex_ip = resolved;
+    Serial.printf("Resolved apex.local to %s\n", apex_ip.toString().c_str());
+    return true;
   }
 
-  apex_ip = resolved;
-  Serial.printf("Resolved apex.local to %s\n", apex_ip.toString().c_str());
-  return true;
+  Serial.println("mDNS lookup for apex.local failed");
+
+  // mDNS being down does not mean the Apex is. Trying the address it answered on
+  // last is what keeps the panel alive through a wedged responder -- and mDNS is
+  // tried first, above, so an Apex that genuinely moved is still found.
+  if (last_good_ip != INADDR_NONE) {
+    apex_ip = last_good_ip;
+    Serial.printf("Falling back to the last known Apex address %s\n",
+                  apex_ip.toString().c_str());
+    return true;
+  }
+
+  return false;
+}
+
+// One failed attempt. Keeps the clock running and escalates when plain retries
+// have had long enough -- it never stops the caller from trying again.
+void note_unreachable() {
+  const uint32_t now = millis();
+
+  // The clock measures "Apex away while the network is fine". With Wi-Fi down
+  // there is nothing here to diagnose, and wifi_manager restarts the responder
+  // on every reconnect anyway -- so hold the clock at zero rather than letting a
+  // Wi-Fi outage bank five minutes and fire a pointless restart the moment the
+  // link returns.
+  if (WiFi.status() != WL_CONNECTED) {
+    unreachable_since_ms = 0;
+    return;
+  }
+
+  if (unreachable_since_ms == 0) {
+    unreachable_since_ms = now;
+  }
+
+  if (now - unreachable_since_ms >= mdns_restart_after_ms &&
+      (last_mdns_restart_ms == 0 || now - last_mdns_restart_ms >= mdns_restart_after_ms)) {
+    Serial.println("Apex unreachable for several minutes, restarting mDNS");
+    wifi_restart_mdns();
+    last_mdns_restart_ms = now;
+    // Re-resolve from scratch on the next attempt, fallback included.
+    apex_ip = INADDR_NONE;
+  }
+}
+
+// One good reply. Clears the escalation clock and banks the working address.
+void note_reachable() {
+  unreachable_since_ms = 0;
+  if (apex_ip != INADDR_NONE && apex_ip != last_good_ip) {
+    last_good_ip = apex_ip;
+    last_good_loaded = true;
+    settings_save_apex_ip(static_cast<uint32_t>(apex_ip));
+    Serial.printf("Remembered Apex address %s\n", apex_ip.toString().c_str());
+  }
 }
 
 OutletMode mode_from_status(const char *status) {
@@ -76,6 +161,16 @@ void store_reading(Reading &reading, float value, uint32_t epoch) {
 
 void apex_forget_address() { apex_ip = INADDR_NONE; }
 
+void apex_retry_now() {
+  // What the RETRY button means: assume nothing, including that the responder
+  // that has been failing to resolve apex.local is healthy.
+  apex_ip = INADDR_NONE;
+  if (WiFi.status() == WL_CONNECTED) {
+    wifi_restart_mdns();
+    last_mdns_restart_ms = millis();
+  }
+}
+
 bool apex_begin_request(HTTPClient &http, const String &path) {
   if (WiFi.status() != WL_CONNECTED || !ensure_apex_ip()) {
     return false;
@@ -89,10 +184,11 @@ bool apex_begin_request(HTTPClient &http, const String &path) {
 }
 
 bool apex_poll(ReefState &state) {
-  state.wifi_up = WiFi.status() == WL_CONNECTED;
-
+  // state.wifi_up belongs to wifi_service(), which watches the link every loop
+  // rather than only once per poll interval.
   HTTPClient http;
   if (!apex_begin_request(http, "/cgi-bin/status.json")) {
+    note_unreachable();
     return false;
   }
 
@@ -100,8 +196,14 @@ bool apex_poll(ReefState &state) {
   if (http_code != HTTP_CODE_OK) {
     Serial.printf("Apex request failed, code: %d\n", http_code);
     http.end();
-    // A stale cached address is a common cause, so drop it and re-resolve.
-    apex_forget_address();
+    // Only a connection-level failure (a negative HTTPClient error) says the
+    // address might be wrong. An Apex that answers with 401 or 500 is an Apex we
+    // can reach, and throwing its address away over that is what turns one bad
+    // reply into a hunt through mDNS.
+    if (http_code < 0) {
+      apex_forget_address();
+    }
+    note_unreachable();
     return false;
   }
 
@@ -111,12 +213,14 @@ bool apex_poll(ReefState &state) {
 
   if (parse_error) {
     Serial.printf("Apex JSON parse failed: %s\n", parse_error.c_str());
+    note_unreachable();
     return false;
   }
 
   JsonObject istat = status_doc["istat"];
   if (istat.isNull()) {
     Serial.println("Apex response had no istat object");
+    note_unreachable();
     return false;
   }
 
@@ -168,6 +272,7 @@ bool apex_poll(ReefState &state) {
   state.apex_up = true;
   state.ever_connected = true;
   state.last_reply_ms = millis();
+  note_reachable();
   ++state.revision;
   return true;
 }

@@ -33,6 +33,53 @@ does not block at all. A typed passphrase is wiped from RAM as soon as the attem
 
 The Apex credentials stay in `secrets.h` — only Wi-Fi is configurable from the panel.
 
+## Staying Connected
+
+The panel hangs on a wall, so a dropped link has to heal itself. `wifi_service()` runs
+every loop and is the only thing that owns `wifi_up`:
+
+- It watches `WiFi.status()` directly rather than trusting the core's own auto-reconnect,
+  which gives up permanently on several disconnect reasons — an AP rebooting out from
+  under it being the common one.
+- Retries are non-blocking: an attempt is started and then watched across later calls, so
+  the panel keeps painting and taking touches while the radio works. Backoff runs 3 s to
+  60 s, and attempts alternate between the saved network and the compiled-in one, because
+  "the saved network is gone for good" and "the AP is rebooting" look identical from here.
+- **It never stops retrying.** However long the network is away — minutes or days — the
+  panel keeps reaching for it and picks it up on its own when it returns.
+- Every five minutes down, one retry is escalated into stopping and restarting the radio.
+  The ESP32 Wi-Fi stack can reach a state where `WiFi.begin()` returns happily and still
+  cannot associate until the radio is cycled; this is the software equivalent of
+  replugging the panel. It is an escalation, not a give-up — the next retry follows
+  immediately.
+- **Every reconnect restarts mDNS and drops the cached Apex address.** mDNS is bound to
+  the interface, so a link that came back without this has a responder on a netif that no
+  longer exists — `apex.local` never resolves again and the panel sits at "APEX X" with
+  Wi-Fi showing as fine. This is the reason a reconnect has to be noticed rather than left
+  to the core to do silently.
+
+The Apex link recovers the same way, one layer up (`apex.cpp`):
+
+- Polling never stops. While the Apex is away the interval stretches from 10 s to 60 s,
+  because every attempt at an absent controller costs a blocking mDNS lookup and an HTTP
+  connect timeout on the UI thread. It snaps back on the first good reply.
+- **The address the Apex last answered on is remembered in NVS.** mDNS is tried first, so
+  a controller that genuinely moved is still found, but when the responder cannot answer
+  the panel goes straight to the known address instead of being stranded. This is the
+  single biggest thing standing between a flaky responder and a dead panel.
+- Only a connection-level failure drops the cached address. An Apex answering 401 or 500
+  is an Apex we can reach, and forgetting its address over that turns one bad reply into
+  a hunt through mDNS.
+- Unreachable for five minutes with Wi-Fi up restarts the mDNS responder — the same
+  escalation as the radio restart, for the same reason. The clock only runs while Wi-Fi is
+  up, so a network outage does not bank five minutes and fire a pointless restart the
+  moment the link returns.
+- RETRY on the Alerts tab means "assume nothing": drop the address, restart the responder,
+  and poll immediately rather than waiting out the backoff.
+
+Drops and recoveries are recorded as acknowledgeable events, so the Alerts tab shows what
+happened overnight instead of only what is wrong right now.
+
 ## Display Orientation
 
 Setup's FLIP button rotates the panel 180° so the USB cable can leave the other side. The

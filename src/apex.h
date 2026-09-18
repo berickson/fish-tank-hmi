@@ -17,6 +17,10 @@ bool apex_set_outlet(const char *did, OutletMode mode);
 // Start or cancel a pre-programmed feed cycle.
 bool apex_set_feed_cycle(uint8_t cycle_index, bool active);
 
+// What the RETRY button does: forget the cached address and restart the mDNS
+// responder, so nothing carried over from the failing state is trusted.
+void apex_retry_now();
+
 // Forget the cached apex.local address so the next call re-resolves it.
 void apex_forget_address();
 

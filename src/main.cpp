@@ -15,6 +15,11 @@ namespace {
 constexpr uint32_t apex_poll_interval_ms = 10000;
 // Asleep the panel shows nothing, so back the polling right off.
 constexpr uint32_t apex_sleep_poll_interval_ms = 60000;
+// Every attempt at an absent Apex costs a blocking mDNS lookup and an HTTP
+// connect timeout on the UI thread, so stretch the interval while it is away
+// instead of stuttering every ten seconds. Polling never stops -- only the gap
+// between attempts grows, and it snaps back to normal on the first good reply.
+constexpr uint32_t apex_retry_max_interval_ms = 60000;
 constexpr uint32_t health_report_interval_ms = 30000;
 // The Apex logs every 10 minutes, so asking more often than that only re-reads
 // what we already have. It is a few KB and exists to heal gaps, not to refresh:
@@ -128,6 +133,26 @@ void report_health() {
       reef.override_count());
 }
 
+// Watch for a feed cycle starting. A cycle runs for minutes against a poll every
+// few seconds, so this catches one whoever started it -- this panel, the Apex
+// display or the phone app.
+void record_feed_start() {
+  static bool was_feeding = false;
+
+  const bool feeding = reef.feed_remaining_s > 0;
+  if (feeding && !was_feeding) {
+    const uint32_t epoch = reef.now_epoch();
+    if (epoch != 0) {
+      reef.last_feed_epoch = epoch;
+      // Seen with our own eyes this boot, so there is no doubt about it.
+      reef.feed_confirmed = true;
+      settings_save_last_feed(epoch);
+      Serial.println("Feed cycle started");
+    }
+  }
+  was_feeding = feeding;
+}
+
 // Turn poll results into the acknowledgeable history the Alerts tab shows.
 void record_link_transition(bool now_up) {
   static bool was_up = false;
@@ -210,6 +235,7 @@ void loop() {
   static uint32_t last_apex_poll = 0;
   static uint32_t last_health_report = 0;
   static uint32_t last_history_topup = 0;
+  static uint32_t apex_retry_interval_ms = apex_poll_interval_ms;
   static bool first_poll_done = false;
   static bool history_seeded = false;
 
@@ -218,11 +244,24 @@ void loop() {
   last_tick = now;
   lv_timer_handler();
 
+  // Before the poll, so a link that just came back is known about -- and a link
+  // that just went away is not spent waiting on HTTP timeouts.
+  wifi_service(reef);
   wifi_poll_scan(reef);
   ui_service_actions();
 
-  const uint32_t interval = ui_is_asleep() ? apex_sleep_poll_interval_ms : apex_poll_interval_ms;
-  if (!first_poll_done || now - last_apex_poll >= interval) {
+  uint32_t interval = ui_is_asleep() ? apex_sleep_poll_interval_ms : apex_poll_interval_ms;
+  if (!reef.apex_up && apex_retry_interval_ms > interval) {
+    interval = apex_retry_interval_ms;
+  }
+
+  const bool retry_now = reef.apex_retry_requested;
+  if (retry_now) {
+    reef.apex_retry_requested = false;
+    apex_retry_interval_ms = apex_poll_interval_ms;
+  }
+
+  if (!first_poll_done || retry_now || now - last_apex_poll >= interval) {
     last_apex_poll = now;
     first_poll_done = true;
 
@@ -230,7 +269,13 @@ void loop() {
     if (!ok) {
       reef.apex_up = false;
     }
+    apex_retry_interval_ms =
+        ok ? apex_poll_interval_ms
+           : min(apex_retry_interval_ms * 2, apex_retry_max_interval_ms);
     record_link_transition(ok);
+    if (ok) {
+      record_feed_start();
+    }
 
     // The first poll is what tells us the time, so it is also the earliest the
     // datalog can be asked for anything.

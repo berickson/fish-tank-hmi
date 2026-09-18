@@ -393,9 +393,11 @@ void flip_clicked(lv_event_t *) {
 }
 
 void retry_clicked(lv_event_t *) {
-  apex_forget_address();
+  apex_retry_now();
   if (state != nullptr) {
     state->apex_up = false;
+    // Polling backs off while the Apex is away; a tap means try it right now.
+    state->apex_retry_requested = true;
   }
 }
 
@@ -832,6 +834,15 @@ void spark_draw(lv_event_t *event) {
 
   lv_draw_ctx_t *draw_ctx = lv_event_get_draw_ctx(event);
 
+  // Each column is drawn twice: a dim wash from the top of its band down to the
+  // baseline, then the band itself at full strength on top. The wash is what
+  // gives the sparkline a body to read at a glance; the band is what carries the
+  // actual high and low.
+  lv_draw_rect_dsc_t fill_dsc;
+  lv_draw_rect_dsc_init(&fill_dsc);
+  fill_dsc.bg_color = lv_color_hex(col_accent);
+  fill_dsc.bg_opa = LV_OPA_20;
+
   lv_draw_rect_dsc_t bar_dsc;
   lv_draw_rect_dsc_init(&bar_dsc);
   bar_dsc.bg_color = lv_color_hex(col_accent);
@@ -841,8 +852,12 @@ void spark_draw(lv_event_t *event) {
   // left rather than the whole thing refusing to draw.
   const uint8_t first = width < trend_columns ? trend_columns - static_cast<uint8_t>(width) : 0;
 
+  // The newest column is still filling -- it holds however many seconds have
+  // elapsed so far, not a whole slice like every column behind it -- so it is
+  // left unplotted and the dot speaks for the present instead. Drawing it
+  // alongside complete columns is what put a spike on the right edge.
   const Trend &trend = reading->trend;
-  for (uint8_t i = first; i < trend_columns; ++i) {
+  for (uint8_t i = first; i + 1 < trend_columns; ++i) {
     if (trend.lo[i] == trend_empty) {
       continue;
     }
@@ -853,6 +868,10 @@ void spark_draw(lv_event_t *event) {
     bar.x2 = x;
     bar.y1 = y_for(trend.hi[i] / 100.0f);
     bar.y2 = y_for(trend.lo[i] / 100.0f);
+
+    lv_area_t fill = bar;
+    fill.y2 = area.y2;
+    lv_draw_rect(draw_ctx, &fill_dsc, &fill);
     lv_draw_rect(draw_ctx, &bar_dsc, &bar);
   }
 
@@ -928,7 +947,17 @@ void build_home() {
     set_flex(card, LV_FLEX_FLOW_COLUMN, 0, LV_FLEX_ALIGN_START);
     set_pad(card, 4, 8, 4);
 
-    make_label(card, card_labels[i], font_tiny, col_label_dim);
+    // Name on the left, 24-hour range right-aligned beside it. Putting the range
+    // here rather than under the chart costs no width and frees a whole line of
+    // height for the sparkline.
+    lv_obj_t *header_row = make_box(card, &st_plain);
+    lv_obj_set_size(header_row, LV_PCT(100), LV_SIZE_CONTENT);
+    set_flex(header_row, LV_FLEX_FLOW_ROW, 4, LV_FLEX_ALIGN_END);
+    make_label(header_row, card_labels[i], font_tiny, col_label_dim);
+    lv_obj_t *header_spacer = make_box(header_row, &st_plain);
+    lv_obj_set_height(header_spacer, 1);
+    lv_obj_set_flex_grow(header_spacer, 1);
+    cards[i].range = make_label(header_row, "", font_tiny, col_range_dim);
 
     lv_obj_t *value_row = make_box(card, &st_plain);
     lv_obj_set_size(value_row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -936,15 +965,15 @@ void build_home() {
     cards[i].value = make_label(value_row, "--", font_num_big, col_text);
     make_label(value_row, card_units[i], font_tiny, 0x6B757F);
 
+    // The card's 76 px of content less the 11 px header and the 30 px value row,
+    // leaving a few px of breathing room at the bottom.
     lv_obj_t *spark = make_box(card, &st_plain);
-    lv_obj_set_size(spark, LV_PCT(100), 16);
+    lv_obj_set_size(spark, LV_PCT(100), 30);
     lv_obj_set_style_bg_opa(spark, LV_OPA_TRANSP, 0);
     lv_obj_clear_flag(spark, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_user_data(spark, const_cast<Reading *>(card_readings[i]));
     lv_obj_add_event_cb(spark, spark_draw, LV_EVENT_DRAW_MAIN, nullptr);
     cards[i].spark = spark;
-
-    cards[i].range = make_label(card, "", font_tiny, col_range_dim);
   }
 
   feed_btn = make_box(page, &st_plain);
@@ -1340,6 +1369,36 @@ void update_card(CardUi &card, const Reading &reading, uint8_t decimals, bool re
   }
 }
 
+// The idle FEED button answers "have I already fed them?". When this boot saw
+// the cycle itself the answer is certain; when it came from NVS the panel was
+// off at some point since, so a later feed cannot be ruled out and the text says
+// so rather than quietly overstating what is known.
+void format_feed_hint(char *out, size_t len) {
+  const int32_t since = state->since_last_feed_s();
+  if (since < 0) {
+    snprintf(out, len, "TAP TO FEED " GLYPH_BULLET " PUMPS PAUSE FOR 15 MINUTES");
+    return;
+  }
+
+  char elapsed[16];
+  const int32_t minutes = since / 60;
+  if (minutes < 60) {
+    snprintf(elapsed, sizeof(elapsed), "%dM", static_cast<int>(minutes));
+  } else if (minutes < 60 * 24) {
+    snprintf(elapsed, sizeof(elapsed), "%dH %02dM", static_cast<int>(minutes / 60),
+             static_cast<int>(minutes % 60));
+  } else {
+    snprintf(elapsed, sizeof(elapsed), "%dD %dH", static_cast<int>(minutes / (60 * 24)),
+             static_cast<int>((minutes / 60) % 24));
+  }
+
+  if (state->feed_confirmed) {
+    snprintf(out, len, "FED %s AGO", elapsed);
+  } else {
+    snprintf(out, len, "FED %s AGO " GLYPH_BULLET " BEFORE LAST RESTART", elapsed);
+  }
+}
+
 void update_home() {
   const uint8_t warnings = state->warn_count();
   show(banner, warnings > 0);
@@ -1374,8 +1433,16 @@ void update_home() {
   set_border_color(feed_btn, feeding ? col_warn : col_feed_idle_border);
   set_text_color(feed_label, feeding ? col_warn : col_accent);
   set_label(feed_label, feeding ? "FEEDING" : "FEED");
-  set_label(feed_hint, feeding ? "TAP TO CANCEL " GLYPH_BULLET " RETURN RESUMES"
-                               : "PRE-PROGRAMMED 15 MIN CYCLE");
+  if (feeding) {
+    // Whoever is feeding the fish may never have met an aquarium before, so no
+    // jargon: say what the tank is doing and what tapping would do about it.
+    set_label(feed_hint, "PUMPS PAUSED SO THE FOOD STAYS IN " GLYPH_BULLET
+                         " TAP TO START THEM AGAIN");
+  } else {
+    char hint[56];
+    format_feed_hint(hint, sizeof(hint));
+    set_label(feed_hint, hint);
+  }
 
   show(feed_clock, feeding);
   if (feeding) {
