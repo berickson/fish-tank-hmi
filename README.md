@@ -121,8 +121,10 @@ bar frame four pages:
   scanned list of nearby networks, and RETRY / RESCAN. Tapping a network opens the
   on-screen keyboard to join it.
 
-The power button in the status bar dims the panel to an idle screen; any touch wakes it.
-There is no auto-sleep.
+The power button at the right of the status bar dims the panel to an idle screen — a dim
+robonerd mark on black. The button stays in place over that screen, and pressing it again
+is the only way back: touching anywhere else does nothing, so the panel cannot be woken
+by a sleeve or a splash. There is no auto-sleep.
 
 ## Apex Integration
 
@@ -322,4 +324,4 @@ To regenerate the logo after the SVG changes: render it with
 `inkscape --export-type=png -w N -h N`, then emit the PNG's alpha channel as an
 `LV_IMG_CF_ALPHA_8BIT` array. Alpha-only images take their color from
 `lv_obj_set_style_img_recolor()`, so one asset serves both the accent status-bar mark and
-the dim sleep watermark.
+the dim mark on the sleep screen.

@@ -18,6 +18,8 @@ extern const lv_img_dsc_t logo_mark_56;
 namespace {
 
 constexpr lv_coord_t status_bar_h = 30;
+constexpr lv_coord_t status_bar_pad_x = 12;
+constexpr lv_coord_t power_button_w = 44;
 constexpr lv_coord_t tab_bar_h = 38;
 constexpr lv_coord_t content_h = 272 - status_bar_h - tab_bar_h;  // 204
 constexpr uint8_t tab_count = 4;
@@ -49,6 +51,7 @@ uint8_t pending_outlet_count = 0;
 int8_t pending_feed = -1;  // -1 none, 0 cancel, 1 start
 
 lv_obj_t *status_bar;
+lv_obj_t *power_button;
 lv_obj_t *wifi_dot;
 lv_obj_t *wifi_label;
 lv_obj_t *apex_dot;
@@ -209,8 +212,7 @@ void anim_set_opa(void *obj, int32_t value) {
   lv_obj_set_style_opa(static_cast<lv_obj_t *>(obj), static_cast<lv_opa_t>(value), 0);
 }
 
-// The design's 3.4 s breathing dot on the idle screen, and the 1.6 s pulse on
-// the warning banner.
+// The 1.6 s pulse on the warning banner.
 void pulse_opacity(lv_obj_t *obj, uint32_t period_ms, lv_opa_t low, lv_opa_t high) {
   lv_anim_t anim;
   lv_anim_init(&anim);
@@ -238,9 +240,9 @@ void go_to_tab(uint8_t tab) {
 }
 
 // The panel can only be written a whole frame at a time, so anything that
-// animates costs a full 480x272 flush per refresh. The idle screen's breathing
-// dot would otherwise keep that running forever; at 100 ms a 3.4 s breath still
-// looks smooth.
+// animates costs a full 480x272 flush per refresh. The pages keep animating and
+// updating behind the sleep overlay, so asleep the period is stretched to stop
+// that from flushing the panel at full rate for nothing.
 void set_refresh_period(uint32_t period_ms) {
   lv_disp_t *disp = lv_disp_get_default();
   if (disp != nullptr && disp->refr_timer != nullptr) {
@@ -254,6 +256,8 @@ void wake() {
   }
   asleep = false;
   show(sleep_overlay, false);
+  show(status_bar, true);
+  set_border_opa(power_button, LV_OPA_COVER);
   set_refresh_period(LV_DISP_DEF_REFR_PERIOD);
   if (hooks.set_backlight_percent != nullptr) {
     hooks.set_backlight_percent(backlight_awake_percent);
@@ -267,6 +271,10 @@ void sleep_now() {
   }
   asleep = true;
   show(sleep_overlay, true);
+  // The rest of the bar goes with the overlay; the power button stays put,
+  // losing only the divider that would otherwise float on the black.
+  show(status_bar, false);
+  set_border_opa(power_button, LV_OPA_TRANSP);
   set_refresh_period(idle_refresh_period_ms);
   if (hooks.set_backlight_percent != nullptr) {
     hooks.set_backlight_percent(backlight_asleep_percent);
@@ -310,9 +318,13 @@ void setup_shortcut_clicked(lv_event_t *) { go_to_tab(tab_setup); }
 
 void banner_clicked(lv_event_t *) { go_to_tab(tab_alerts); }
 
-void power_clicked(lv_event_t *) { sleep_now(); }
-
-void sleep_overlay_clicked(lv_event_t *) { wake(); }
+void power_clicked(lv_event_t *) {
+  if (asleep) {
+    wake();
+  } else {
+    sleep_now();
+  }
+}
 
 void mode_selected(lv_event_t *event) {
   lv_obj_t *matrix = lv_event_get_target(event);
@@ -697,7 +709,7 @@ void build_status_bar(lv_obj_t *screen) {
   lv_obj_set_style_border_width(status_bar, 1, 0);
   set_border_color(status_bar, 0x1D222A);
   set_flex(status_bar, LV_FLEX_FLOW_ROW, 10, LV_FLEX_ALIGN_CENTER);
-  set_pad(status_bar, 0, 12, 0);
+  set_pad(status_bar, 0, status_bar_pad_x, 0);
 
   lv_obj_t *logo = lv_img_create(status_bar);
   lv_img_set_src(logo, &logo_mark_15);
@@ -725,19 +737,22 @@ void build_status_bar(lv_obj_t *screen) {
   pill(&wifi_dot, &wifi_label, "WI-FI");
   divider();
   pill(&apex_dot, &apex_label, "APEX");
+}
 
-  lv_obj_t *spacer = make_box(status_bar, &st_plain);
-  lv_obj_set_height(spacer, 1);
-  lv_obj_set_flex_grow(spacer, 1);
-
-  lv_obj_t *power = make_box(status_bar, &st_plain);
-  lv_obj_set_size(power, 44, status_bar_h);
-  lv_obj_set_style_border_side(power, LV_BORDER_SIDE_LEFT, 0);
-  lv_obj_set_style_border_width(power, 1, 0);
-  set_border_color(power, 0x1D222A);
-  lv_obj_add_flag(power, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(power, power_clicked, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *glyph = make_label(power, LV_SYMBOL_POWER, font_body, col_outline_ink);
+// The power button is not part of the status bar: it is a direct child of the
+// screen, built last so it draws over the sleep overlay. Pressing it is the only
+// way back out of sleep, so it has to stay visible -- and in the same place --
+// while everything else behind it is covered.
+void build_power_button(lv_obj_t *screen) {
+  power_button = make_box(screen, &st_plain);
+  lv_obj_set_size(power_button, power_button_w, status_bar_h);
+  lv_obj_set_pos(power_button, 480 - status_bar_pad_x - power_button_w, 0);
+  lv_obj_set_style_border_side(power_button, LV_BORDER_SIDE_LEFT, 0);
+  lv_obj_set_style_border_width(power_button, 1, 0);
+  set_border_color(power_button, 0x1D222A);
+  lv_obj_add_flag(power_button, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(power_button, power_clicked, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *glyph = make_label(power_button, LV_SYMBOL_POWER, font_body, col_outline_ink);
   lv_obj_center(glyph);
 }
 
@@ -1284,20 +1299,17 @@ void build_sleep(lv_obj_t *screen) {
   lv_obj_set_flex_align(sleep_overlay, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(sleep_overlay, 16, 0);
+  // Clickable with no handler: the overlay swallows touches so they cannot reach
+  // the tabs and buttons it covers. Only the power button wakes the display.
   lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(sleep_overlay, sleep_overlay_clicked, LV_EVENT_CLICKED, nullptr);
 
-  lv_obj_t *watermark = lv_img_create(sleep_overlay);
-  lv_img_set_src(watermark, &logo_mark_56);
-  lv_obj_set_style_img_recolor(watermark, lv_color_hex(col_accent), 0);
-  lv_obj_set_style_img_recolor_opa(watermark, LV_OPA_COVER, 0);
-  lv_obj_set_style_img_opa(watermark, LV_OPA_10, 0);
+  lv_obj_t *mark = lv_img_create(sleep_overlay);
+  lv_img_set_src(mark, &logo_mark_56);
+  lv_obj_set_style_img_recolor(mark, lv_color_hex(col_accent), 0);
+  lv_obj_set_style_img_recolor_opa(mark, LV_OPA_COVER, 0);
+  lv_obj_set_style_img_opa(mark, LV_OPA_30, 0);
 
-  lv_obj_t *dot = make_dot(sleep_overlay, 10, col_accent);
-  pulse_opacity(dot, 3400, LV_OPA_20, LV_OPA_60);
-
-  lv_obj_t *touch = make_label(sleep_overlay, "TOUCH", font_tiny, 0x1D2227);
-  lv_obj_align(touch, LV_ALIGN_BOTTOM_MID, 0, -14);
+  make_label(sleep_overlay, "PRESS POWER", font_tiny, col_disabled_ink);
 
   show(sleep_overlay, false);
 }
@@ -1702,6 +1714,7 @@ void ui_create(ReefState *reef_state, const UiHooks &ui_hooks) {
   build_tab_bar(screen);
   build_keyboard(screen);
   build_sleep(screen);
+  build_power_button(screen);
 
   go_to_tab(tab_home);
 }
