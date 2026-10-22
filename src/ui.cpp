@@ -30,6 +30,12 @@ constexpr uint8_t backlight_awake_percent = 100;
 // broken rather than asleep.
 constexpr uint8_t backlight_asleep_percent = 3;
 constexpr uint32_t idle_refresh_period_ms = 100;
+// How long since the last feed before the FEED button turns amber ("feed them
+// now") and then red ("overdue"). 22 h rather than 24 leaves room to feed a
+// little earlier each day without the button nagging.
+constexpr int32_t feed_due_s = 22 * 60 * 60;
+constexpr int32_t feed_overdue_s = 32 * 60 * 60;
+constexpr uint32_t feed_pulse_period_ms = 2000;
 constexpr uint32_t join_result_linger_ms = 5000;
 
 enum Tab : uint8_t { tab_home, tab_control, tab_alerts, tab_setup };
@@ -1008,7 +1014,7 @@ void build_home() {
   set_flex(feed_top, LV_FLEX_FLOW_ROW, 10, LV_FLEX_ALIGN_END);
   feed_label = make_label(feed_top, "FEED", font_label, col_accent);
   feed_clock = make_label(feed_top, "00:00", font_num_mid, col_warn);
-  feed_hint = make_label(feed_btn, "PRE-PROGRAMMED 15 MIN CYCLE", font_tiny, 0x58626C);
+  feed_hint = make_label(feed_btn, "PRE-PROGRAMMED 15 MIN CYCLE", font_tiny, col_hint_ink);
 }
 
 void build_control() {
@@ -1381,34 +1387,81 @@ void update_card(CardUi &card, const Reading &reading, uint8_t decimals, bool re
   }
 }
 
-// The idle FEED button answers "have I already fed them?". When this boot saw
-// the cycle itself the answer is certain; when it came from NVS the panel was
-// off at some point since, so a later feed cannot be ruled out and the text says
-// so rather than quietly overstating what is known.
-void format_feed_hint(char *out, size_t len) {
+void format_elapsed(char *out, size_t len, int32_t seconds) {
+  const int32_t minutes = seconds / 60;
+  if (minutes < 60) {
+    snprintf(out, len, "%dM", static_cast<int>(minutes));
+  } else if (minutes < 60 * 24) {
+    snprintf(out, len, "%dH %02dM", static_cast<int>(minutes / 60),
+             static_cast<int>(minutes % 60));
+  } else {
+    snprintf(out, len, "%dD %dH", static_cast<int>(minutes / (60 * 24)),
+             static_cast<int>((minutes / 60) % 24));
+  }
+}
+
+// Background opacity for the overdue FEED button: a slow triangle wave, stepped
+// so the button is only invalidated a handful of times a second rather than on
+// every loop.
+lv_opa_t feed_pulse_opa() {
+  constexpr uint32_t steps = 8;
+  const uint32_t phase = millis() % feed_pulse_period_ms;
+  const uint32_t half = feed_pulse_period_ms / 2;
+  const uint32_t tri = phase < half ? phase : feed_pulse_period_ms - phase;
+  const uint32_t step = tri * steps / half;
+  return static_cast<lv_opa_t>(LV_OPA_20 + step * (LV_OPA_60 - LV_OPA_20) / steps);
+}
+
+// The FEED button is mostly read from across the room, so when idle it shows
+// the time since the last feed in large numerals and colours the whole button
+// by how overdue that is.
+//
+// When this boot saw the feed itself the elapsed time is certain; when it came
+// from NVS the panel was off at some point since, so a later feed cannot be
+// ruled out. The colour still follows the stored time, but the overdue pulse is
+// held back and the hint says so rather than raising an alarm that may be false.
+void update_feed_idle() {
   const int32_t since = state->since_last_feed_s();
   if (since < 0) {
-    snprintf(out, len, "TAP TO FEED " GLYPH_BULLET " PUMPS PAUSE FOR 15 MINUTES");
+    set_bg_color(feed_btn, col_feed_idle_bg);
+    set_bg_opa(feed_btn, LV_OPA_COVER);
+    set_border_color(feed_btn, col_feed_idle_border);
+    set_text_color(feed_label, col_accent);
+    set_text_color(feed_hint, col_hint_ink);
+    set_label(feed_hint, "TAP TO FEED " GLYPH_BULLET " PUMPS PAUSE FOR 15 MINUTES");
+    show(feed_clock, false);
     return;
   }
 
-  char elapsed[16];
-  const int32_t minutes = since / 60;
-  if (minutes < 60) {
-    snprintf(elapsed, sizeof(elapsed), "%dM", static_cast<int>(minutes));
-  } else if (minutes < 60 * 24) {
-    snprintf(elapsed, sizeof(elapsed), "%dH %02dM", static_cast<int>(minutes / 60),
-             static_cast<int>(minutes % 60));
+  uint32_t ink;
+  if (since < feed_due_s) {
+    ink = col_accent;
+    set_bg_color(feed_btn, col_feed_idle_bg);
+    set_bg_opa(feed_btn, LV_OPA_COVER);
+    set_border_color(feed_btn, col_feed_idle_border);
+  } else if (since < feed_overdue_s) {
+    ink = col_warn;
+    set_bg_color(feed_btn, col_warn_banner);
+    set_bg_opa(feed_btn, LV_OPA_COVER);
+    set_border_color(feed_btn, col_warn);
   } else {
-    snprintf(elapsed, sizeof(elapsed), "%dD %dH", static_cast<int>(minutes / (60 * 24)),
-             static_cast<int>((minutes / 60) % 24));
+    // Red ink on a red pulse would vanish at the peak, so the text goes light.
+    ink = col_text_strong;
+    set_bg_color(feed_btn, col_danger);
+    set_bg_opa(feed_btn, state->feed_confirmed ? feed_pulse_opa() : LV_OPA_20);
+    set_border_color(feed_btn, col_danger);
   }
+  set_text_color(feed_label, ink);
+  set_text_color(feed_clock, ink);
+  set_text_color(feed_hint, since < feed_overdue_s ? col_hint_ink : col_text_strong);
 
-  if (state->feed_confirmed) {
-    snprintf(out, len, "FED %s AGO", elapsed);
-  } else {
-    snprintf(out, len, "FED %s AGO " GLYPH_BULLET " BEFORE LAST RESTART", elapsed);
-  }
+  char elapsed[16];
+  format_elapsed(elapsed, sizeof(elapsed), since);
+  set_label(feed_clock, elapsed);
+  show(feed_clock, true);
+  set_label(feed_hint, state->feed_confirmed
+                           ? "SINCE LAST FEED"
+                           : "SINCE LAST FEED SEEN " GLYPH_BULLET " PANEL RESTARTED SINCE");
 }
 
 void update_home() {
@@ -1440,33 +1493,34 @@ void update_home() {
   update_card(cards[1], state->ph, 2, redraw_trend);
   update_card(cards[2], state->salinity, 1, redraw_trend);
 
-  const bool feeding = state->feeding();
-  set_bg_color(feed_btn, feeding ? col_warn_banner : col_feed_idle_bg);
-  set_border_color(feed_btn, feeding ? col_warn : col_feed_idle_border);
-  set_text_color(feed_label, feeding ? col_warn : col_accent);
-  set_label(feed_label, feeding ? "FEEDING" : "FEED");
-  if (feeding) {
-    // Whoever is feeding the fish may never have met an aquarium before, so no
-    // jargon: say what the tank is doing and what tapping would do about it.
-    set_label(feed_hint, "PUMPS PAUSED SO THE FOOD STAYS IN " GLYPH_BULLET
-                         " TAP TO START THEM AGAIN");
-  } else {
-    char hint[56];
-    format_feed_hint(hint, sizeof(hint));
-    set_label(feed_hint, hint);
+  set_label(feed_label, state->feeding() ? "FEEDING" : "FEED");
+  if (!state->feeding()) {
+    update_feed_idle();
+    return;
   }
 
-  show(feed_clock, feeding);
-  if (feeding) {
-    // The countdown comes from the Apex, so clamp it rather than trusting it to
-    // fit MM:SS.
-    constexpr int longest_clock_s = 99 * 60 + 59;
-    const int reported = state->live_feed_seconds();
-    const int remaining = reported < 0 ? 0 : (reported > longest_clock_s ? longest_clock_s : reported);
-    char clock[12];
-    snprintf(clock, sizeof(clock), "%02d:%02d", remaining / 60, remaining % 60);
-    set_label(feed_clock, clock);
-  }
+  // A solid teal fill, unlike any of the idle colours, so "feeding right now"
+  // cannot be mistaken for "due" at a glance.
+  set_bg_color(feed_btn, col_accent);
+  set_bg_opa(feed_btn, LV_OPA_COVER);
+  set_border_color(feed_btn, col_accent);
+  set_text_color(feed_label, col_bg_screen);
+  set_text_color(feed_clock, col_bg_screen);
+  set_text_color(feed_hint, col_bg_screen);
+  // Whoever is feeding the fish may never have met an aquarium before, so no
+  // jargon: say what the tank is doing and what tapping would do about it.
+  set_label(feed_hint, "PUMPS PAUSED SO THE FOOD STAYS IN " GLYPH_BULLET
+                       " TAP TO START THEM AGAIN");
+
+  // The countdown comes from the Apex, so clamp it rather than trusting it to
+  // fit MM:SS.
+  constexpr int longest_clock_s = 99 * 60 + 59;
+  const int reported = state->live_feed_seconds();
+  const int remaining = reported < 0 ? 0 : (reported > longest_clock_s ? longest_clock_s : reported);
+  char clock[12];
+  snprintf(clock, sizeof(clock), "%02d:%02d", remaining / 60, remaining % 60);
+  set_label(feed_clock, clock);
+  show(feed_clock, true);
 }
 
 void update_control() {

@@ -24,6 +24,7 @@ constexpr uint32_t col_inactive_bg = 0x181D24;
 constexpr uint32_t col_inactive_ink = 0x7C8691;
 constexpr uint32_t col_feed_idle_bg = 0x141A20;
 constexpr uint32_t col_feed_idle_border = 0x28303A;
+constexpr uint32_t col_hint_ink = 0x58626C;
 constexpr uint32_t col_tab_active_bg = 0x151A21;
 constexpr uint32_t col_outline_ink = 0x8D979F;
 constexpr uint32_t col_key_bg = 0x1B212A;
