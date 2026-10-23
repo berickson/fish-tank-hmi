@@ -179,6 +179,19 @@ lv_obj_t *make_box(lv_obj_t *parent, lv_style_t *style) {
   return box;
 }
 
+// LVGL makes every plain object clickable, and a press lands on the topmost
+// clickable object without reaching its parent. Layout boxes, spacers and dots
+// inside a button would each swallow the taps that land on them, so a button
+// calls this once its contents are built.
+void pass_clicks_to_parent(lv_obj_t *button) {
+  const uint32_t count = lv_obj_get_child_cnt(button);
+  for (uint32_t i = 0; i < count; ++i) {
+    lv_obj_t *child = lv_obj_get_child(button, i);
+    lv_obj_clear_flag(child, LV_OBJ_FLAG_CLICKABLE);
+    pass_clicks_to_parent(child);
+  }
+}
+
 void set_flex(lv_obj_t *obj, lv_flex_flow_t flow, lv_coord_t gap, lv_flex_align_t cross) {
   lv_obj_set_flex_flow(obj, flow);
   // The third argument places the track itself on the cross axis. Leaving it at
@@ -737,6 +750,7 @@ void build_status_bar(lv_obj_t *screen) {
     lv_obj_add_event_cb(group, setup_shortcut_clicked, LV_EVENT_CLICKED, nullptr);
     *dot = make_dot(group, 6, col_accent);
     *label = make_label(group, text, font_tiny, 0x7D8791);
+    pass_clicks_to_parent(group);
   };
 
   divider();
@@ -793,6 +807,7 @@ void build_tab_bar(lv_obj_t *screen) {
       lv_obj_center(tab_badge_label);
       show(tab_badge, false);
     }
+    pass_clicks_to_parent(cell);
   }
 }
 
@@ -953,6 +968,7 @@ void build_home() {
   lv_obj_set_flex_grow(banner_spacer, 1);
   lv_obj_t *view = make_label(banner, "VIEW", font_tiny, col_warn);
   lv_obj_set_style_opa(view, LV_OPA_70, 0);
+  pass_clicks_to_parent(banner);
 
   lv_obj_t *card_row = make_box(page, &st_plain);
   lv_obj_set_size(card_row, LV_PCT(100), 86);
@@ -1015,6 +1031,7 @@ void build_home() {
   feed_label = make_label(feed_top, "FEED", font_label, col_accent);
   feed_clock = make_label(feed_top, "00:00", font_num_mid, col_warn);
   feed_hint = make_label(feed_btn, "PRE-PROGRAMMED 15 MIN CYCLE", font_tiny, col_hint_ink);
+  pass_clicks_to_parent(feed_btn);
 }
 
 void build_control() {
