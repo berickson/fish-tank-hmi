@@ -6,7 +6,6 @@
 
 // Things the UI needs the board to do for it.
 struct UiHooks {
-  void (*set_backlight_percent)(uint8_t percent);
   // Rotate the panel 180 degrees and remember the choice.
   void (*set_display_flipped)(bool flipped);
 };

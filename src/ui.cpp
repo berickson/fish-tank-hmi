@@ -13,7 +13,7 @@
 #define GLYPH_BULLET "\xE2\x80\xA2"
 
 extern const lv_img_dsc_t logo_mark_15;
-extern const lv_img_dsc_t logo_mark_56;
+extern const lv_img_dsc_t logo_mark_112;
 
 namespace {
 
@@ -25,10 +25,6 @@ constexpr lv_coord_t content_h = 272 - status_bar_h - tab_bar_h;  // 204
 constexpr uint8_t tab_count = 4;
 constexpr uint8_t alert_row_count = 10;
 constexpr uint8_t feed_cycle_a_index = 1;
-constexpr uint8_t backlight_awake_percent = 100;
-// Sleep dims the panel rather than killing it; a true 0 makes some panels look
-// broken rather than asleep.
-constexpr uint8_t backlight_asleep_percent = 3;
 constexpr uint32_t idle_refresh_period_ms = 100;
 // How long since the last feed before the FEED button turns amber ("feed them
 // now") and then red ("overdue"). 22 h rather than 24 leaves room to feed a
@@ -278,9 +274,6 @@ void wake() {
   show(status_bar, true);
   set_border_opa(power_button, LV_OPA_COVER);
   set_refresh_period(LV_DISP_DEF_REFR_PERIOD);
-  if (hooks.set_backlight_percent != nullptr) {
-    hooks.set_backlight_percent(backlight_awake_percent);
-  }
   go_to_tab(tab_home);
 }
 
@@ -295,9 +288,6 @@ void sleep_now() {
   show(status_bar, false);
   set_border_opa(power_button, LV_OPA_TRANSP);
   set_refresh_period(idle_refresh_period_ms);
-  if (hooks.set_backlight_percent != nullptr) {
-    hooks.set_backlight_percent(backlight_asleep_percent);
-  }
 }
 
 void queue_outlet(const char *did, OutletMode mode) {
@@ -1326,13 +1316,16 @@ void build_sleep(lv_obj_t *screen) {
   // the tabs and buttons it covers. Only the power button wakes the display.
   lv_obj_add_flag(sleep_overlay, LV_OBJ_FLAG_CLICKABLE);
 
+  // The backlight stays up while asleep -- it is one lamp for the whole panel,
+  // and dimming it would dim the power button too -- so the mark and hint are
+  // dimmed here instead.
   lv_obj_t *mark = lv_img_create(sleep_overlay);
-  lv_img_set_src(mark, &logo_mark_56);
+  lv_img_set_src(mark, &logo_mark_112);
   lv_obj_set_style_img_recolor(mark, lv_color_hex(col_accent), 0);
   lv_obj_set_style_img_recolor_opa(mark, LV_OPA_COVER, 0);
-  lv_obj_set_style_img_opa(mark, LV_OPA_30, 0);
+  lv_obj_set_style_img_opa(mark, LV_OPA_20, 0);
 
-  make_label(sleep_overlay, "PRESS POWER", font_tiny, col_disabled_ink);
+  make_label(sleep_overlay, "PRESS POWER", font_num_mid, col_disabled_ink);
 
   show(sleep_overlay, false);
 }

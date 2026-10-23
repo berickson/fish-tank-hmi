@@ -217,7 +217,7 @@ void setup() {
   input_driver.read_cb = touch_read;
   lv_indev_drv_register(&input_driver);
 
-  const UiHooks hooks = {set_backlight_percent, set_display_flipped};
+  const UiHooks hooks = {set_display_flipped};
   ui_create(&reef, hooks);
 
   // Paint the shell before the blocking Wi-Fi connect, so the panel comes up

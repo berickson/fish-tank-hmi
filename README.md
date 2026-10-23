@@ -121,8 +121,9 @@ bar frame four pages:
   scanned list of nearby networks, and RETRY / RESCAN. Tapping a network opens the
   on-screen keyboard to join it.
 
-The power button at the right of the status bar dims the panel to an idle screen — a dim
-robonerd mark on black. The button stays in place over that screen, and pressing it again
+The power button at the right of the status bar blanks the panel to an idle screen — a
+dim robonerd mark and PRESS POWER hint on black, with the button itself left at full
+brightness. The button stays in place over that screen, and pressing it again
 is the only way back: touching anywhere else does nothing, so the panel cannot be woken
 by a sleeve or a splash. There is no auto-sleep.
 
@@ -232,8 +233,9 @@ and worth understanding before you flash it:
 - Touch: GT911 capacitive I2C. SDA 8, SCL 4, reset GPIO 38, address `0x5D`.
 - Display rendering uses Arduino_GFX `v1.4.6`; LVGL writes through a flush callback to the panel.
 - Touch uses TouchLib with `TOUCH_MODULES_GT911`.
-- Backlight is on LEDC channel 0; sleep dims it to 3% rather than 0, because a truly dark
-  panel reads as broken rather than asleep.
+- Backlight is on LEDC channel 0 and stays at 100% while asleep. It lights the whole panel
+  at once, so dimming it would also dim the power button that has to wake it; the sleep
+  screen is dimmed in its pixels instead.
 - Audio (unused so far): an **NS4168** I2S mono class-D amp, 2.5 W — identified from the
   chip markings under a microscope, not just the schematic. The vendor also ships an
   AX98357A datasheet; that part is not on this board. Driven by BCLK GPIO 42, LRCLK GPIO 2,
